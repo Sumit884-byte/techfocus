@@ -1,0 +1,11 @@
+{
+  "title": "TechFocus",
+  "description": "Streamlined platform offering curated tech videos to help users focus on learning without distractions, ideal for tech enthusiasts and students.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
