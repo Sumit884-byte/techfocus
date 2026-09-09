@@ -779,6 +779,7 @@ function extractPlaylists(payload) {
         id: rendererId,
         title: renderer.title?.simpleText || renderer.title?.runs?.map((run) => run.text).join("") || metadata?.title?.content || "Playlist",
         channel: renderer.shortBylineText?.runs?.[0]?.text || renderer.ownerText?.runs?.[0]?.text || metadata?.metadata?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text?.content || "",
+        channelThumb: pickChannelThumb(renderer) || pickChannelThumb(metadata) || pickChannelThumb(metadata?.image),
         count: playlistCountFromRenderer(renderer),
         duration: playlistDurationFromRenderer(renderer),
         thumb: thumbs.slice(-1)[0]?.url || lockupThumb,
@@ -885,6 +886,7 @@ async function searchPlaylists(topic, page = 1) {
             id: item.playlistId,
             title: item.title,
             channel: item.author || "",
+            channelThumb: bestThumbUrl(item.authorThumbnails),
             count: typeof item.videoCount === "number" && item.videoCount > 0
               ? item.videoCount === 1 ? "1 video" : `${item.videoCount} videos`
               : videoCountLabel(item.videoCount),

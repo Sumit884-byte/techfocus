@@ -456,11 +456,25 @@ type Playlist = {
   id: string;
   title: string;
   channel: string;
+  channelThumb?: string;
   count: string;
   duration?: string;
   thumb: string;
   category: string;
 };
+
+function playlistAsVideo(playlist: Playlist): Video {
+  return {
+    id: playlist.id,
+    title: playlist.title,
+    channel: playlist.channel,
+    channelThumb: playlist.channelThumb,
+    duration: "",
+    views: "",
+    posted: "",
+    category: playlist.category,
+  };
+}
 
 const CHANNEL_LOGOS = new Map<string, string>();
 
@@ -616,14 +630,69 @@ function loadYoutubeApi() {
   return w.__ytApi;
 }
 
+const THUMB_PRELOADED = new Set<string>();
+
+function visibleCardBudget() {
+  if (typeof window === "undefined") return 9;
+  const width = window.innerWidth;
+  const cols = width >= 1400 ? 4 : width >= 980 ? 3 : width >= 640 ? 2 : 1;
+  const rows = Math.max(2, Math.ceil((window.innerHeight - 160) / 300) + 1);
+  return cols * rows;
+}
+
+function preloadThumb(videoId: string) {
+  if (!videoId || THUMB_PRELOADED.has(videoId)) return;
+  THUMB_PRELOADED.add(videoId);
+  const sources = thumbSources(videoId);
+  let level = 0;
+  const probe = () => {
+    if (level >= sources.length) return;
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      if (image.naturalWidth > 0 && image.naturalWidth <= 120 && level < sources.length - 1) {
+        level += 1;
+        probe();
+      }
+    };
+    image.onerror = () => {
+      level += 1;
+      probe();
+    };
+    image.src = sources[level];
+  };
+  probe();
+  const href = sources[0];
+  if (!document.querySelector(`link[rel="preload"][href="${href}"]`)) {
+    const link = document.createElement("link");
+    link.rel = "preload";
+    link.as = "image";
+    link.href = href;
+    document.head.appendChild(link);
+  }
+}
+
+function preloadThumbs(ids: string[]) {
+  ids.forEach(preloadThumb);
+}
+
 function preloadPlayer(videoId: string) {
-  const href = thumb(videoId);
-  if (document.querySelector(`link[rel="preload"][href="${href}"]`)) return;
-  const link = document.createElement("link");
-  link.rel = "preload";
-  link.as = "image";
-  link.href = href;
-  document.head.appendChild(link);
+  preloadThumb(videoId);
+}
+
+function warmVisibleVideos(videos: Video[]) {
+  const shown = videos.slice(0, visibleCardBudget());
+  preloadThumbs(shown.map((video) => video.id));
+  shown.forEach((video) => {
+    if (video.channelThumb) rememberChannelThumb(video.channel, video.channelThumb);
+    if (!video.channel || channelThumbOf(video)) return;
+    fetch(`/api/channel-logo?name=${encodeURIComponent(video.channel)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (typeof data.url === "string" && data.url) rememberChannelThumb(video.channel, data.url);
+      })
+      .catch(() => {});
+  });
 }
 
 function pickClosestVideos(query: string, bag: Record<string, Video[]>, suggestions: string[] = []) {
@@ -914,29 +983,35 @@ function sanitizeVideo(video: Video, fallbackChannel = ""): Video {
   };
 }
 
-function LazyThumb({ id, alt, hovered }: { id: string; alt: string; hovered: boolean }) {
+function LazyThumb({ id, alt, hovered, priority = false }: { id: string; alt: string; hovered: boolean; priority?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(priority || THUMB_PRELOADED.has(id));
   const [level, setLevel] = useState(0);
   const sources = thumbSources(id);
 
   useEffect(() => {
-    setReady(false);
     setLevel(0);
+    if (priority || THUMB_PRELOADED.has(id)) {
+      setReady(true);
+      preloadThumb(id);
+      return;
+    }
+    setReady(false);
     const el = ref.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
           setReady(true);
+          preloadThumb(id);
           observer.disconnect();
         }
       },
-      { rootMargin: "240px" },
+      { rootMargin: "640px" },
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [id]);
+  }, [id, priority]);
 
   function nextSource() {
     setLevel((current) => Math.min(current + 1, sources.length - 1));
@@ -949,7 +1024,8 @@ function LazyThumb({ id, alt, hovered }: { id: string; alt: string; hovered: boo
           key={`${id}-${level}`}
           src={sources[level]}
           alt={alt}
-          loading="lazy"
+          loading={priority ? "eager" : "lazy"}
+          fetchPriority={priority ? "high" : "low"}
           decoding="async"
           onError={nextSource}
           onLoad={(event) => {
@@ -968,10 +1044,12 @@ function VideoCard({
   video,
   onClick,
   loading = false,
+  priority = false,
 }: {
   video: Video;
   onClick: () => void;
   loading?: boolean;
+  priority?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
 
@@ -1001,7 +1079,7 @@ function VideoCard({
         }}
       >
         <div className="tf-thumb">
-          <LazyThumb id={video.id} alt={video.title} hovered={hovered} />
+          <LazyThumb id={video.id} alt={video.title} hovered={hovered} priority={priority} />
           <div
             style={{
               position: "absolute",
@@ -1107,47 +1185,22 @@ function SymbolicCard({
   onSelect,
   onReject,
   loading = false,
+  priority = false,
 }: {
   video: Video;
   onSelect: (video: Video) => void;
   onReject?: (video: Video) => void;
   loading?: boolean;
+  priority?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [state, setState] = useState<"pending" | "keep" | "drop">("pending");
+  const keep = isTechVideo(video);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting) return;
-        const keep = isTechVideo(video);
-        setState(keep ? "keep" : "drop");
-        if (!keep) onReject?.(video);
-        observer.disconnect();
-      },
-      { rootMargin: "280px" },
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [video, onReject]);
+    if (!keep) onReject?.(video);
+  }, [keep, video, onReject]);
 
-  if (state === "drop") return null;
-  if (state === "keep") return <VideoCard video={video} onClick={() => onSelect(video)} loading={loading} />;
-
-  return (
-    <div
-      ref={ref}
-      aria-hidden
-      style={{
-        borderRadius: "4px",
-        background: "var(--tf-panel)",
-        border: "1px dashed var(--tf-line)",
-        aspectRatio: "16/9",
-      }}
-    />
-  );
+  if (!keep) return null;
+  return <VideoCard video={video} onClick={() => onSelect(video)} loading={loading} priority={priority} />;
 }
 
 function PlaylistCard({ playlist, onClick }: { playlist: Playlist; onClick: () => void }) {
@@ -1276,20 +1329,7 @@ function PlaylistCard({ playlist, onClick }: { playlist: Playlist; onClick: () =
           >
             {playlist.title}
           </div>
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "11px",
-              color: "var(--tf-muted)",
-              lineHeight: 1.4,
-              height: 16,
-              overflow: "hidden",
-              whiteSpace: "nowrap",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {playlist.channel}
-          </div>
+          <VideoMetaLine video={playlistAsVideo(playlist)} />
         </div>
       </div>
     </button>
@@ -1487,12 +1527,12 @@ function PlaylistView({
             {playlist.title}
           </h1>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--tf-muted)" }}>
-              {playlist.channel}
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--tf-muted)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <VideoMetaLine video={playlistAsVideo(playlist)} />
               {(formatVideoCount(playlist.count) || PLAYLIST_COUNTS.get(playlist.id))
-                ? ` · ${formatVideoCount(playlist.count) || PLAYLIST_COUNTS.get(playlist.id)}`
-                : ""}
-              {durationLabel ? ` · ${durationLabel}` : ""}
+                ? <span>{formatVideoCount(playlist.count) || PLAYLIST_COUNTS.get(playlist.id)}</span>
+                : null}
+              {durationLabel ? <span>{durationLabel}</span> : null}
             </div>
             <div style={{ display: "flex", border: "1px solid var(--tf-line)", borderRadius: "3px", overflow: "hidden" }}>
               {(["cards", "titles"] as const).map((mode) => (
@@ -1643,7 +1683,12 @@ function VideoGrid({
 }) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const rejectedRef = useRef(0);
+  const budget = visibleCardBudget();
   useLoadWhenScrolledThrough(sentinelRef, onLoadMore, hasMore, loadingMore, videos.length);
+
+  useEffect(() => {
+    warmVisibleVideos(videos);
+  }, [videos]);
 
   function rejectNonTech() {
     rejectedRef.current += 1;
@@ -1656,7 +1701,7 @@ function VideoGrid({
   return (
     <>
       <div className="tf-grid">
-        {videos.map((video) =>
+        {videos.map((video, index) =>
           symbolic ? (
             <SymbolicCard
               key={video.id}
@@ -1664,6 +1709,7 @@ function VideoGrid({
               onSelect={onSelect}
               onReject={rejectNonTech}
               loading={openingId === video.id}
+              priority={index < budget}
             />
           ) : (
             <VideoCard
@@ -1671,6 +1717,7 @@ function VideoGrid({
               video={video}
               onClick={() => onSelect(video)}
               loading={openingId === video.id}
+              priority={index < budget}
             />
           ),
         )}
@@ -1804,11 +1851,25 @@ function PlaylistGrid({
   useLoadWhenScrolledThrough(sentinelRef, onLoadMore, hasMore, loadingMore, playlists.length);
 
   useEffect(() => {
+    const budget = visibleCardBudget();
     playlists.forEach((playlist, index) => {
       if (playlist.count || playlist.duration) {
         rememberPlaylist(playlist.id, PLAYLIST_CACHE.get(playlist.id) || [], playlist.count, undefined, playlist.duration);
       }
-      enqueuePlaylistPreload(playlist.id, index < 4);
+      enqueuePlaylistPreload(playlist.id, index < budget);
+      if (index < budget) {
+        const thumbId = firstVideoIdFromThumb(playlist.thumb);
+        if (thumbId) preloadThumb(thumbId);
+        if (playlist.channelThumb) rememberChannelThumb(playlist.channel, playlist.channelThumb);
+        if (playlist.channel && !channelThumbOf(playlistAsVideo(playlist))) {
+          fetch(`/api/channel-logo?name=${encodeURIComponent(playlist.channel)}`)
+            .then((res) => res.json())
+            .then((data) => {
+              if (typeof data.url === "string" && data.url) rememberChannelThumb(playlist.channel, data.url);
+            })
+            .catch(() => {});
+        }
+      }
     });
   }, [playlists]);
 
@@ -1910,6 +1971,10 @@ function HistoryPage({
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    warmVisibleVideos(videos);
+  }, [videos]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3709,18 +3774,46 @@ function PlayerView({
               <div
                 style={{
                   position: "relative",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "11px",
-                  color: "var(--tf-accent)",
-                  letterSpacing: "0.1em",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
                   marginBottom: 12,
                 }}
               >
-                {(shared && listen ? listen.status : streamStatus) === "buffering"
-                  ? "LOADING AUDIO"
-                  : (shared && listen ? listen.status : streamStatus) === "starting"
-                    ? "STARTING AUDIO"
-                    : "LISTENING"}
+                <div
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "11px",
+                    color: "var(--tf-accent)",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  {(shared && listen ? listen.status : streamStatus) === "buffering"
+                    ? "LOADING AUDIO"
+                    : (shared && listen ? listen.status : streamStatus) === "starting"
+                      ? "STARTING AUDIO"
+                      : "LISTENING"}
+                </div>
+                <button
+                  type="button"
+                  aria-label="Switch to video"
+                  onClick={() => chooseWatchMode(false)}
+                  style={{
+                    background: "none",
+                    border: "1px solid var(--tf-line)",
+                    color: "var(--tf-muted)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "11px",
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    padding: "6px 12px",
+                    borderRadius: "3px",
+                    cursor: "pointer",
+                  }}
+                >
+                  video
+                </button>
               </div>
               <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 16 }}>
                 <button
@@ -3943,10 +4036,6 @@ function PlayerView({
           </div>
         </div>
 
-        {onOpenCourse ? (
-          <CoursePanel video={video} known={course} queue={queue} onOpen={onOpenCourse} />
-        ) : null}
-
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 28 }}>
           <button
             type="button"
@@ -4030,6 +4119,10 @@ function PlayerView({
         ) : null}
 
         {commentsOpen ? <WatchComments comments={comments} ready={descReady} /> : null}
+
+        {onOpenCourse ? (
+          <CoursePanel video={video} known={course} queue={queue} onOpen={onOpenCourse} />
+        ) : null}
 
         <div
           style={{
