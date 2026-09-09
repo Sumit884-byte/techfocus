@@ -380,6 +380,15 @@ function ViewsIcon() {
   );
 }
 
+function PlaylistIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 6h18M3 12h12M3 18h12" />
+      <path d="M17 12v8l6-4Z" />
+    </svg>
+  );
+}
+
 function PremiereIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
@@ -461,6 +470,7 @@ type Playlist = {
   duration?: string;
   thumb: string;
   category: string;
+  kind?: string;
 };
 
 function playlistAsVideo(playlist: Playlist): Video {
@@ -892,6 +902,7 @@ function displayCategory(category: string) {
 function cleanMeta(value?: string) {
   const text = (value || "").trim();
   if (!text || /^unknown$/i.test(text) || text === "0") return "";
+  if (/(playlist|full course)/i.test(text) && !/\bago\b/i.test(text)) return "";
   return text;
 }
 
@@ -941,10 +952,34 @@ function videoMetaParts(video: Video) {
   ].filter(Boolean);
 }
 
+const VIDEO_META_CACHE = new Map<string, { views: string; posted: string }>();
+
 function VideoMetaLine({ video, className = "" }: { video: Video; className?: string }) {
-  const posted = postedInfo(video.posted);
+  const [filled, setFilled] = useState(() => VIDEO_META_CACHE.get(video.id) || { views: "", posted: "" });
+
+  useEffect(() => {
+    const cached = VIDEO_META_CACHE.get(video.id);
+    if (cached) setFilled(cached);
+    if (cleanMeta(video.views) && postedInfo(video.posted).text) return;
+    if (!/^[\w-]{11}$/.test(video.id)) return;
+    const controller = new AbortController();
+    fetch(`/api/meta?id=${encodeURIComponent(video.id)}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        const next = {
+          views: String(data.views || ""),
+          posted: String(data.posted || ""),
+        };
+        VIDEO_META_CACHE.set(video.id, next);
+        setFilled(next);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [video.id, video.views, video.posted]);
+
+  const posted = postedInfo(video.posted || filled.posted);
   const channel = cleanMeta(video.channel) && !/views?/i.test(video.channel) ? cleanMeta(video.channel) : "";
-  const views = compactViews(video.views);
+  const views = compactViews(video.views || filled.views);
   if (!channel && !views && !posted.text) return null;
   return (
     <div className={`tf-video-meta ${className}`.trim()}>
@@ -955,7 +990,7 @@ function VideoMetaLine({ video, className = "" }: { video: Video; className?: st
         </span>
       ) : null}
       {views ? (
-        <span className="tf-video-meta-stat" title={viewLabel(video.views)}>
+        <span className="tf-video-meta-stat" title={viewLabel(video.views || filled.views)}>
           <ViewsIcon />
           <span>{views}</span>
         </span>
@@ -2351,11 +2386,7 @@ function CoursePanel({
   queue?: Video[];
   onOpen: (playlist: Playlist) => void;
 }) {
-  const inKnown =
-    Boolean(known) &&
-    isCoursePlaylistId(known?.id) &&
-    (PLAYLIST_CACHE.get(known?.id || "")?.some((item) => item.id === video.id) ||
-      queue.some((item) => item.id === video.id));
+  const inKnown = Boolean(known) && isCoursePlaylistId(known?.id);
   const [courses, setCourses] = useState<Playlist[]>(() => (inKnown && known ? [known] : []));
 
   useEffect(() => {
@@ -3347,6 +3378,9 @@ function PlayerView({
   const [comments, setComments] = useState<VideoComment[]>([]);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [likes, setLikes] = useState("");
+  const [series, setSeries] = useState<Playlist | null>(() =>
+    course && isCoursePlaylistId(course.id) ? course : null,
+  );
   const [clock, setClock] = useState({ current: 0, duration: 0, paused: true });
   const shellRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<{
@@ -3394,6 +3428,25 @@ function PlayerView({
     setAudioMode(initialAudioMode(video.id, preferAudio));
     setAudioRate(readAudioRate(video.id));
   }, [video.id, preferAudio]);
+
+  useEffect(() => {
+    if (course && isCoursePlaylistId(course.id)) {
+      setSeries(course);
+      return;
+    }
+    const controller = new AbortController();
+    setSeries(null);
+    fetch(`/api/courses?id=${encodeURIComponent(video.id)}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        const incoming = (Array.isArray(data.courses) ? data.courses : []) as Playlist[];
+        setSeries(incoming.find((item) => isCoursePlaylistId(item.id)) || null);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setSeries(null);
+      });
+    return () => controller.abort();
+  }, [video.id, course?.id]);
 
   function chooseWatchMode(listen: boolean) {
     setAudioMode(listen);
@@ -4007,6 +4060,17 @@ function PlayerView({
             }}
           >
             <VideoMetaLine video={video} />
+            {series && onOpenCourse ? (
+              <button
+                type="button"
+                className="tf-video-meta-stat tf-playlist-link"
+                title={series.title || "Open course"}
+                onClick={() => onOpenCourse(series)}
+              >
+                <PlaylistIcon />
+                <span>{series.kind === "course" ? "full course" : "full playlist"}</span>
+              </button>
+            ) : null}
             {likes ? (
               <span className="tf-video-meta-stat" title={`${likes} likes`}>
                 <LikeIcon />
@@ -4121,7 +4185,7 @@ function PlayerView({
         {commentsOpen ? <WatchComments comments={comments} ready={descReady} /> : null}
 
         {onOpenCourse ? (
-          <CoursePanel video={video} known={course} queue={queue} onOpen={onOpenCourse} />
+          <CoursePanel video={video} known={series || course} queue={queue} onOpen={onOpenCourse} />
         ) : null}
 
         <div

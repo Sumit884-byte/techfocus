@@ -131,7 +131,50 @@ function looksLikeViews(text) {
 }
 
 function looksLikeDate(text) {
-  return /\b(ago|streamed|premiered|yesterday|today)\b/i.test(text || "");
+  return /\b(ago|streamed|premiered|yesterday|today|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(text || "") ||
+    /\b20\d{2}\b/.test(text || "");
+}
+
+function looksLikePlaylistMeta(text) {
+  return /^(view\s+)?full\s+(playlist|course)$|^(playlist|course)$/i.test((text || "").trim());
+}
+
+function postedFromIso(iso) {
+  const at = Date.parse(iso || "");
+  if (!Number.isFinite(at)) return "";
+  const days = Math.max(0, Math.round((Date.now() - at) / 86400000));
+  if (days < 1) return "today";
+  if (days === 1) return "1 day ago";
+  if (days < 7) return `${days} days ago`;
+  if (days < 30) {
+    const weeks = Math.max(1, Math.round(days / 7));
+    return weeks === 1 ? "1 week ago" : `${weeks} weeks ago`;
+  }
+  if (days < 365) {
+    const months = Math.max(1, Math.round(days / 30));
+    return months === 1 ? "1 month ago" : `${months} months ago`;
+  }
+  const years = Math.max(1, Math.round(days / 365));
+  return years === 1 ? "1 year ago" : `${years} years ago`;
+}
+
+function metaFromLabel(label) {
+  const text = String(label || "");
+  const views = formatViews((text.match(/([\d.,]+\s*[kmb]?)\s*views?/i) || [])[1] || "");
+  const posted = (text.match(/\b((?:streamed|premiered)\s+)?(?:\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|yesterday|today)\b/i) || [])[0] || "";
+  return { views, posted };
+}
+
+function lockupTextParts(lockup) {
+  const rows = lockup?.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows || [];
+  const texts = [];
+  for (const row of rows) {
+    for (const part of row.metadataParts || []) {
+      const text = part.text?.content || "";
+      if (text) texts.push(text);
+    }
+  }
+  return texts;
 }
 
 function parseRuns(runs) {
@@ -189,11 +232,15 @@ function pickPosted(renderer) {
     renderer.publishedTimeText?.simpleText || "",
     parseRuns(renderer.publishedTimeText?.runs),
     parseRuns(renderer.videoInfo?.runs),
+    renderer.accessibility?.accessibilityData?.label || "",
+    renderer.title?.accessibility?.accessibilityData?.label || "",
   ];
   for (const value of candidates) {
-    const parts = value.split(/[•·|]/).map((part) => part.trim()).filter(Boolean);
-    const date = parts.find((part) => looksLikeDate(part));
+    const parts = value.split(/[•·|,]/).map((part) => part.trim()).filter(Boolean);
+    const date = parts.find((part) => looksLikeDate(part) && !looksLikeViews(part));
     if (date) return date;
+    const fromLabel = metaFromLabel(value).posted;
+    if (fromLabel) return fromLabel;
   }
   return "";
 }
@@ -203,7 +250,8 @@ function pickViews(renderer) {
   if (looksLikeViews(direct) || /\d/.test(direct)) return formatViews(direct);
   const info = parseRuns(renderer.videoInfo?.runs);
   const part = info.split(/[•·|]/).map((item) => item.trim()).find((item) => looksLikeViews(item) || /^[\d.,]+[kmb]?$/i.test(item));
-  return formatViews(part || "");
+  if (part) return formatViews(part);
+  return metaFromLabel(renderer.accessibility?.accessibilityData?.label || renderer.title?.accessibility?.accessibilityData?.label || "").views;
 }
 
 function isBlockedTitle(title) {
@@ -541,10 +589,10 @@ function extractInnerTubeVideos(payload) {
     if (lockupId && !seen.has(lockupId) && /^[\w-]{11}$/.test(lockupId)) {
       const metadata = lockup.metadata?.lockupMetadataViewModel;
       const title = metadata?.title?.content || "Untitled";
-      const rows = metadata?.metadata?.contentMetadataViewModel?.metadataRows || [];
-      const channelRaw = rows[0]?.metadataParts?.[0]?.text?.content || "";
-      const views = rows[1]?.metadataParts?.[0]?.text?.content || "";
-      const postedRaw = rows[1]?.metadataParts?.[1]?.text?.content || "";
+      const parts = lockupTextParts(lockup);
+      const channelRaw = parts.find((part) => part && !looksLikeViews(part) && !looksLikeDate(part) && !looksLikePlaylistMeta(part) && !/^unknown$/i.test(part)) || "";
+      const views = formatViews(parts.find((part) => looksLikeViews(part) && !looksLikePlaylistMeta(part)) || "");
+      const postedRaw = parts.find((part) => looksLikeDate(part) && !looksLikeViews(part) && !looksLikePlaylistMeta(part)) || "";
       seen.add(lockupId);
       videos.push({
         id: lockupId,
@@ -552,7 +600,7 @@ function extractInnerTubeVideos(payload) {
         channel: looksLikeViews(channelRaw) || /^unknown$/i.test(channelRaw) ? "" : channelRaw,
         channelThumb: pickChannelThumb(lockup),
         duration: findBadgeDuration(lockup) || "",
-        views: formatViews(views),
+        views,
         posted: /^unknown$/i.test(postedRaw) ? "" : postedRaw,
         category: "Recommended",
       });
@@ -847,9 +895,120 @@ function extractWatchCourses(payload, videoId) {
   return courses;
 }
 
+function extractLinkedPlaylists(payload) {
+  const found = [];
+  const seen = new Set();
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    const label = node.content || node.text?.content || "";
+    const looksLink = /playlist|full course/i.test(label);
+    const blob = looksLink ? JSON.stringify(node) : "";
+    const fromUrl = playlistIdFrom((blob.match(/[?&]list=([^&"\\]+)/) || [])[1] || "");
+    const fromBrowse = looksLink
+      ? playlistIdFrom(node.browseEndpoint?.browseId || node.playlistId || node.watchEndpoint?.playlistId || "")
+      : "";
+    const id = fromUrl || fromBrowse;
+    if (id && isCoursePlaylistId(id) && !seen.has(id)) {
+      seen.add(id);
+      found.push({
+        id,
+        title: /full (playlist|course)/i.test(label) ? "" : nodeText(label) || "",
+        channel: "",
+        count: "",
+        duration: "",
+        thumb: "",
+        category: "",
+        kind: /course/i.test(label) ? "course" : "playlist",
+        linked: /full (playlist|course)/i.test(label),
+      });
+    }
+    for (const value of Object.values(node)) {
+      if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(payload);
+  return found;
+}
+
+function extractSuperTitleCourses(payload) {
+  const found = [];
+  const seen = new Set();
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    const superTitle = node.superTitleLink || node.superTitleText;
+    for (const run of superTitle?.runs || []) {
+      const url = run.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url || "";
+      const id = playlistIdFrom(
+        (url.match(/[?&]list=([^&]+)/) || [])[1] ||
+          run.navigationEndpoint?.browseEndpoint?.browseId ||
+          run.navigationEndpoint?.watchEndpoint?.playlistId ||
+          "",
+      );
+      if (id && isCoursePlaylistId(id) && !seen.has(id)) {
+        seen.add(id);
+        const title = nodeText(run.text) || nodeText(superTitle) || "Course";
+        found.push({
+          id,
+          title,
+          channel: "",
+          count: "",
+          duration: "",
+          thumb: "",
+          category: inferCategory(title),
+          kind: "course",
+        });
+      }
+    }
+    for (const value of Object.values(node)) {
+      if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(payload);
+  return found;
+}
+
+function extractCourseLessonCount(payload) {
+  let count = "";
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    const summary = node.courseProgressViewModel?.progressSummary?.content || "";
+    const match = summary.match(/(\d+)\s+lessons/i);
+    if (match) count = `${match[1]} videos`;
+    for (const value of Object.values(node)) {
+      if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(payload);
+  return count;
+}
+
 async function findCoursesForVideo(videoId) {
   const next = await innertube("next", { videoId });
-  return next ? extractWatchCourses(next, videoId).slice(0, 3) : [];
+  if (!next) return [];
+  const titled = extractSuperTitleCourses(next);
+  const panel = extractWatchCourses(next, videoId);
+  const linked = extractLinkedPlaylists(next).filter((item) => item.linked);
+  const listed = extractPlaylists(next);
+  const lessonCount = extractCourseLessonCount(next);
+  const byId = new Map();
+  for (const item of [...titled, ...panel, ...listed, ...linked]) {
+    if (!isCoursePlaylistId(item.id)) continue;
+    const prev = byId.get(item.id) || {};
+    byId.set(item.id, {
+      ...prev,
+      ...item,
+      title: item.title && item.title !== "Playlist" ? item.title : prev.title || item.title || "Course",
+      channel: item.channel || prev.channel || "",
+      count: item.count || prev.count || lessonCount || "",
+      thumb: item.thumb || prev.thumb || "",
+      category: item.category || prev.category || inferCategory(item.title || prev.title || ""),
+      kind: item.kind || prev.kind || (titled.some((course) => course.id === item.id) ? "course" : "playlist"),
+    });
+  }
+  const order = titled.length
+    ? titled.map((item) => item.id)
+    : [...new Set([...panel.map((item) => item.id), ...linked.map((item) => item.id)])];
+  return order.map((id) => byId.get(id)).filter(Boolean).slice(0, 3);
 }
 
 async function searchPlaylists(topic, page = 1) {
@@ -1584,6 +1743,23 @@ async function videoDetails(videoId) {
   return payload;
 }
 
+const metaCache = new Map();
+
+async function videoPublicMeta(videoId) {
+  const cached = metaCache.get(videoId);
+  if (cached && Date.now() - cached.ts < DETAILS_TTL_MS) return cached;
+  const watch = (await watchPlayerResponse(videoId)) || (await innertube("player", { videoId }));
+  const views = formatViews(watch?.videoDetails?.viewCount);
+  const posted = postedFromIso(
+    watch?.microformat?.playerMicroformatRenderer?.publishDate ||
+      watch?.microformat?.playerMicroformatRenderer?.uploadDate ||
+      "",
+  );
+  const payload = { views, posted, ts: Date.now() };
+  if (views || posted) metaCache.set(videoId, payload);
+  return payload;
+}
+
 function collectTranscriptSegments(node, segments = []) {
   if (!node || typeof node !== "object") return segments;
   const renderer = node.transcriptSegmentRenderer;
@@ -2247,6 +2423,21 @@ export async function handleRequest(req, res) {
     } catch {
       res.writeHead(502);
       res.end();
+    }
+    return;
+  }
+
+  if (req.method === "GET" && (url.pathname === "/api/meta" || url.pathname === "/meta")) {
+    const id = (url.searchParams.get("id") || "").trim();
+    if (!/^[\w-]{11}$/.test(id)) {
+      sendJson(res, 400, { views: "", posted: "" });
+      return;
+    }
+    try {
+      const meta = await videoPublicMeta(id);
+      sendJson(res, 200, { id, views: meta.views || "", posted: meta.posted || "" });
+    } catch {
+      sendJson(res, 200, { id, views: "", posted: "" });
     }
     return;
   }

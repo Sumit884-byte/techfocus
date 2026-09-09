@@ -712,6 +712,11 @@ button:hover > .tf-card {
   white-space: nowrap;
 }
 
+.tf-video-meta-stat,
+.tf-video-meta-when {
+  flex-shrink: 0;
+}
+
 .tf-video-meta > span:not(:last-child)::after {
   content: "·";
   margin-left: 6px;
@@ -724,6 +729,7 @@ button:hover > .tf-card {
   gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
+  max-width: 58%;
 }
 
 .tf-video-meta-channel svg,
@@ -760,6 +766,20 @@ button:hover > .tf-card {
 .tf-video-meta-when svg {
   flex-shrink: 0;
   color: var(--accent);
+}
+
+button.tf-playlist-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+button.tf-playlist-link:hover {
+  text-decoration: underline;
 }
 
 .tf-history-list {
