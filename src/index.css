@@ -162,6 +162,162 @@ body {
   padding: 7px 14px !important;
 }
 
+.tf-search-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+}
+
+.tf-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tf-filter-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.tf-filter-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 1px solid var(--tf-line);
+  color: var(--tf-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tf-filter-btn.is-active {
+  background: var(--tf-accent-soft);
+  border-color: var(--tf-accent-line);
+  color: var(--tf-accent);
+}
+
+.tf-filter-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--tf-accent);
+  color: #111827;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.tf-filter-active-chip {
+  border: 1px solid var(--tf-accent-line);
+  color: var(--tf-accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  padding: 5px 10px;
+  border-radius: 999px;
+}
+
+.tf-filter-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tf-filter-row-title {
+  display: block;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--tf-text);
+  margin-bottom: 6px;
+}
+
+.tf-filter-row-copy {
+  display: block;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--tf-muted);
+}
+
+.tf-filter-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--tf-dim);
+  flex-shrink: 0;
+  padding-top: 4px;
+}
+
+.tf-filter-row-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tf-accent);
+  max-width: 160px;
+  text-align: right;
+}
+
+.tf-filter-panel {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--tf-line);
+}
+
+.tf-filter-group-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tf-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.tf-filter-clear {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--tf-accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tf-dub-note {
+  position: fixed;
+  left: 16px;
+  bottom: calc(var(--tf-dock-h) + 12px);
+  z-index: 92;
+  max-width: min(520px, calc(100vw - 32px));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--tf-accent);
+  background: var(--tf-panel);
+  border: 1px solid var(--tf-accent-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
 .tf-header-bar {
   padding: 0 var(--tf-pad);
   height: 60px;
@@ -196,6 +352,46 @@ body {
 .tf-yt-host > div {
   width: 100% !important;
   height: 100% !important;
+}
+
+.tf-yt-host:fullscreen,
+.tf-yt-host:-webkit-full-screen {
+  inset: 0;
+  background: #000;
+  clip-path: none;
+  opacity: 1;
+}
+
+.tf-player-bleed:fullscreen,
+.tf-player-bleed:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+  border-radius: 0;
+  border: 0;
+  margin: 0;
+  background: #000;
+}
+
+.tf-fullview-btn {
+  position: fixed;
+  z-index: 88;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(12, 12, 14, 0.78);
+  color: #e5e7eb;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
 }
 
 .tf-watch {
@@ -870,38 +1066,6 @@ button.tf-playlist-link:hover {
   display: block;
   height: 100%;
   background: var(--accent);
-}
-
-.tf-history-comments {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.tf-history-comments li {
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--muted);
-}
-
-.tf-history-comments strong {
-  display: block;
-  color: var(--text);
-  font-size: 12px;
-  margin-bottom: 4px;
-}
-
-.tf-history-comments em {
-  float: right;
-  font-style: normal;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--dim);
 }
 
 @media (max-width: 720px) {

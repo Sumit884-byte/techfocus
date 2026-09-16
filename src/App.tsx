@@ -1,4 +1,17 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, createContext, useContext, type ReactNode } from "react";
+import AutoDubListen from "./AutoDubListen";
+import SearchFilterChips from "./SearchFilterChips";
+import VideoFullView, { exitFullView } from "./VideoFullView";
+import {
+  applyPreferredAudio,
+  CONTENT_LANGS,
+  langLabel,
+  prefsFingerprint,
+  readSearchPrefs,
+  searchApiQuery,
+  writeSearchPrefs,
+  type SearchPrefs,
+} from "./searchSettings";
 import { durationSeconds, isShort, isTechVideo, matchesCategory } from "./techFilter";
 
 const CATEGORIES = [
@@ -1926,7 +1939,6 @@ function PlaylistGrid({
 }
 
 type VideoComment = { author: string; text: string; likes?: string; posted?: string; avatar?: string };
-type VideoDetails = { comments: VideoComment[] };
 
 function CommentAvatar({ comment }: { comment: VideoComment }) {
   const [failed, setFailed] = useState(false);
@@ -1994,7 +2006,6 @@ function HistoryPage({
   openingId?: string | null;
 }) {
   const [filter, setFilter] = useState("");
-  const [details, setDetails] = useState<Record<string, VideoDetails>>({});
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -2011,42 +2022,10 @@ function HistoryPage({
     warmVisibleVideos(videos);
   }, [videos]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const missing = videos.map((video) => video.id).filter((id) => !details[id]);
-    if (!missing.length) return;
-    (async () => {
-      for (const id of missing.slice(0, 12)) {
-        if (cancelled) return;
-        try {
-          const res = await fetch(`/api/details?id=${encodeURIComponent(id)}`);
-          const data = await res.json();
-          if (cancelled) return;
-          setDetails((current) => ({
-            ...current,
-            [id]: {
-              comments: Array.isArray(data.comments) ? data.comments : [],
-            },
-          }));
-        } catch {
-          if (!cancelled) setDetails((current) => ({ ...current, [id]: { comments: [] } }));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [videos, details]);
-
   const filtered = videos.filter((video) => {
     const q = filter.toLowerCase();
     if (!q) return true;
-    const extra = details[video.id];
-    return (
-      video.title.toLowerCase().includes(q) ||
-      video.channel.toLowerCase().includes(q) ||
-      (extra?.comments || []).some((item) => item.text.toLowerCase().includes(q) || item.author.toLowerCase().includes(q))
-    );
+    return video.title.toLowerCase().includes(q) || video.channel.toLowerCase().includes(q);
   });
   void tick;
 
@@ -2143,7 +2122,6 @@ function HistoryPage({
         ) : (
           <div className="tf-history-list">
             {filtered.map((video) => {
-              const extra = details[video.id];
               const percent = watchPercent(video.id, video.duration);
               const done = percent >= 95;
               return (
@@ -2171,17 +2149,6 @@ function HistoryPage({
                       </div>
                     </div>
                   </button>
-                  {extra?.comments?.length ? (
-                    <ul className="tf-history-comments">
-                      {extra.comments.slice(0, 3).map((comment, index) => (
-                        <li key={`${video.id}-${index}`}>
-                          <strong>{comment.author}</strong>
-                          {comment.likes ? <em>{comment.likes}</em> : null}
-                          <span>{comment.text}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
                 </article>
               );
             })}
@@ -2192,17 +2159,97 @@ function HistoryPage({
   );
 }
 
+function SettingsChip({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        background: active ? "var(--tf-accent-soft)" : "none",
+        border: `1px solid ${active ? "var(--tf-accent-line)" : "var(--tf-line)"}`,
+        color: active ? "var(--tf-accent)" : "var(--tf-muted)",
+        fontFamily: "var(--font-mono)",
+        fontSize: "11px",
+        letterSpacing: "0.04em",
+        padding: "6px 10px",
+        borderRadius: "999px",
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function SettingsToggle({
+  checked,
+  label,
+  onToggle,
+}: {
+  checked: boolean;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={onToggle}
+      style={{
+        width: 52,
+        height: 30,
+        flexShrink: 0,
+        border: "none",
+        borderRadius: 999,
+        background: checked ? "var(--tf-accent)" : "var(--tf-line)",
+        position: "relative",
+        cursor: "pointer",
+        padding: 0,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 3,
+          left: checked ? 25 : 3,
+          width: 24,
+          height: 24,
+          borderRadius: "50%",
+          background: checked ? "#111827" : "var(--tf-text)",
+          transition: "left 0.15s ease",
+        }}
+      />
+    </button>
+  );
+}
+
 function SettingsPage({
   audioOnly,
   onAudioOnly,
   includeShorts,
   onIncludeShorts,
+  prefs,
+  onPrefs,
+  geminiReady,
   onBack,
 }: {
   audioOnly: boolean;
   onAudioOnly: (next: boolean) => void;
   includeShorts: boolean;
   onIncludeShorts: (next: boolean) => void;
+  prefs: SearchPrefs;
+  onPrefs: (next: SearchPrefs) => void;
+  geminiReady: boolean | null;
   onBack: () => void;
 }) {
   return (
@@ -2365,6 +2412,93 @@ function SettingsPage({
           >
             {includeShorts ? "shorts on" : "shorts off"}
           </div>
+        </div>
+        <div
+          style={{
+            background: "var(--tf-panel)",
+            border: "1px solid var(--tf-line)",
+            borderRadius: 16,
+            padding: 18,
+            marginTop: 16,
+          }}
+        >
+          <div style={{ fontSize: 16, fontWeight: 700, color: "var(--tf-text)", marginBottom: 6 }}>
+            Language
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--tf-muted)", marginBottom: 12 }}>
+            Language the video should be in. Search uses YouTube locale (hl/gl). Captions and dubbed tracks prefer this language when the lecture has them.
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {CONTENT_LANGS.map((item) => (
+              <SettingsChip
+                key={item.id}
+                label={item.label}
+                active={prefs.lang === item.id}
+                onClick={() => onPrefs({ ...prefs, lang: item.id })}
+              />
+            ))}
+          </div>
+          <div
+            style={{
+              marginTop: 14,
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--tf-accent)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}
+          >
+            {langLabel(prefs.lang)}
+          </div>
+        </div>
+        <div
+          style={{
+            background: "var(--tf-panel)",
+            border: "1px solid var(--tf-line)",
+            borderRadius: 16,
+            padding: 18,
+            marginTop: 16,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--tf-text)", marginBottom: 8 }}>
+                Auto dub
+              </div>
+              <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--tf-muted)" }}>
+                Prefer YouTube&apos;s dubbed audio track in your language. If the lecture has no dub, Listen mode speaks a Gemini-translated transcript (browser speech, or Gemini TTS when the key works). A full client-side YouTube remux is not possible in the iframe player.
+              </div>
+            </div>
+            <SettingsToggle
+              checked={prefs.autoDub}
+              label="Auto dub mode"
+              onToggle={() => onPrefs({ ...prefs, autoDub: !prefs.autoDub })}
+            />
+          </div>
+          <div
+            style={{
+              marginTop: 14,
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: prefs.autoDub ? "var(--tf-accent)" : "var(--tf-dim)",
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+            }}
+          >
+            {prefs.autoDub ? "auto dub on" : "auto dub off"}
+            {geminiReady === false ? " · gemini key missing" : geminiReady ? " · gemini ready" : ""}
+          </div>
+        </div>
+        <div
+          style={{
+            background: "var(--tf-panel)",
+            border: "1px solid var(--tf-line)",
+            borderRadius: 16,
+            padding: 18,
+            marginTop: 16,
+          }}
+        >
+          <SearchFilterChips variant="settings" prefs={prefs} onChange={onPrefs} />
         </div>
       </main>
     </div>
@@ -2767,6 +2901,9 @@ type YtHandle = {
   setSize?: (width: number, height: number) => void;
   setPlaybackRate?: (rate: number) => void;
   getVideoData?: () => { video_id?: string };
+  getAvailableAudioTracks?: () => Array<Record<string, unknown>>;
+  setAudioTrack?: (track: unknown) => void;
+  setOption?: (module: string, option: string, value: unknown) => void;
 };
 
 function readAudioRates() {
@@ -2898,6 +3035,7 @@ type ListenApi = {
   pause: () => void;
   seek: (seconds: number) => void;
   setRate: (rate: number) => void;
+  muteOriginal: (muted: boolean) => void;
 };
 
 const ListenContext = createContext<ListenApi | null>(null);
@@ -2920,6 +3058,8 @@ function PersistentAudio({
   docked,
   stage,
   autoNext = true,
+  lang = "en",
+  autoDub = false,
   onAdvance,
   onPlaying,
   onClose,
@@ -2931,6 +3071,8 @@ function PersistentAudio({
   docked: boolean;
   stage: HTMLElement | null;
   autoNext?: boolean;
+  lang?: string;
+  autoDub?: boolean;
   onAdvance: (video: Video) => void;
   onPlaying?: () => void;
   onClose: () => void;
@@ -2983,6 +3125,26 @@ function PersistentAudio({
     let ticking = false;
     const place = () => {
       ticking = false;
+      const fsEl = document.fullscreenElement || (document as Document & { webkitFullscreenElement?: Element | null }).webkitFullscreenElement;
+      const hostFs = Boolean(fsEl && (fsEl === host || host.contains(fsEl)));
+      if (hostFs) {
+        const width = Math.max(1, Math.round(window.innerWidth));
+        const height = Math.max(1, Math.round(window.innerHeight));
+        host.style.top = "0px";
+        host.style.left = "0px";
+        host.style.width = `${width}px`;
+        host.style.height = `${height}px`;
+        host.style.zIndex = "81";
+        host.style.pointerEvents = "auto";
+        host.style.opacity = "1";
+        host.style.clipPath = "none";
+        try {
+          playerRef.current?.setSize?.(width, height);
+        } catch {
+          // ignore
+        }
+        return;
+      }
       const hideVideo = docked || document.body.dataset.listenAudio === "1";
       if (hideVideo) {
         host.style.top = "-220px";
@@ -3036,6 +3198,8 @@ function PersistentAudio({
     const frame = window.setInterval(place, 400);
     window.addEventListener("resize", requestPlace);
     window.addEventListener("scroll", requestPlace, true);
+    document.addEventListener("fullscreenchange", requestPlace);
+    document.addEventListener("webkitfullscreenchange", requestPlace);
     window.visualViewport?.addEventListener("resize", requestPlace);
     window.visualViewport?.addEventListener("scroll", requestPlace);
     const observer = typeof ResizeObserver !== "undefined" && stage ? new ResizeObserver(place) : null;
@@ -3044,6 +3208,8 @@ function PersistentAudio({
       window.clearInterval(frame);
       window.removeEventListener("resize", requestPlace);
       window.removeEventListener("scroll", requestPlace, true);
+      document.removeEventListener("fullscreenchange", requestPlace);
+      document.removeEventListener("webkitfullscreenchange", requestPlace);
       window.visualViewport?.removeEventListener("resize", requestPlace);
       window.visualViewport?.removeEventListener("scroll", requestPlace);
       observer?.disconnect();
@@ -3106,6 +3272,8 @@ function PersistentAudio({
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
+          hl: lang,
+          cc_lang_pref: lang,
           origin: window.location.origin,
         },
         events: {
@@ -3115,6 +3283,7 @@ function PersistentAudio({
             if (resumeAt > 5) player?.seekTo?.(resumeAt, true);
             restoreSound(player);
             applyPlaybackRate(player, readAudioRate(videoRef.current.id));
+            applyPreferredAudio(player, lang, autoDub);
             try {
               const box = host.getBoundingClientRect();
               player?.setSize?.(Math.max(1, Math.round(box.width)), Math.max(1, Math.round(box.height)));
@@ -3226,6 +3395,10 @@ function PersistentAudio({
     applyPlaybackRate(playerRef.current, rate);
   }, [rate]);
 
+  useEffect(() => {
+    applyPreferredAudio(playerRef.current, lang, autoDub);
+  }, [lang, autoDub, video.id]);
+
   const api: ListenApi = {
     video,
     clock,
@@ -3253,14 +3426,31 @@ function PersistentAudio({
       applyPlaybackRate(playerRef.current, next);
       setRate(next);
     },
+    muteOriginal: (muted) => {
+      try {
+        if (muted) playerRef.current?.mute?.();
+        else playerRef.current?.unMute?.();
+      } catch {
+        // ignore
+      }
+    },
   };
 
   return (
     <ListenContext.Provider value={api}>
       {children}
+      <AutoDubListen
+        enabled={autoDub}
+        lang={lang}
+        videoId={video.id}
+        current={clock.current}
+        paused={clock.paused}
+        onMuteOriginal={api.muteOriginal}
+      />
       <div
         ref={hostRef}
         className="tf-yt-host"
+        data-video-id={video.id}
         style={{
           position: "fixed",
           top: 0,
@@ -3346,6 +3536,8 @@ function PlayerView({
   course = null,
   onOpenCourse,
   preferAudio = false,
+  lang = "en",
+  autoDub = false,
 }: {
   video: Video;
   onBack: () => void;
@@ -3358,6 +3550,8 @@ function PlayerView({
   course?: Playlist | null;
   onOpenCourse?: (playlist: Playlist) => void;
   preferAudio?: boolean;
+  lang?: string;
+  autoDub?: boolean;
 }) {
   const listen = useContext(ListenContext);
   const shared = listen?.video.id === video.id;
@@ -3382,6 +3576,7 @@ function PlayerView({
     course && isCoursePlaylistId(course.id) ? course : null,
   );
   const [clock, setClock] = useState({ current: 0, duration: 0, paused: true });
+  const [playerBox, setPlayerBox] = useState<HTMLElement | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<{
     destroy: () => void;
@@ -3393,6 +3588,7 @@ function PlayerView({
     pauseVideo?: () => void;
     mute?: () => void;
     unMute?: () => void;
+    setPlaybackRate?: (rate: number) => void;
   } | null>(null);
   const pageRef = useRef(1);
   const loadingRef = useRef(false);
@@ -3449,6 +3645,7 @@ function PlayerView({
   }, [video.id, course?.id]);
 
   function chooseWatchMode(listen: boolean) {
+    if (listen) void exitFullView();
     setAudioMode(listen);
     writeWatchMode(video.id, listen ? "listen" : "video");
   }
@@ -3562,6 +3759,9 @@ function PlayerView({
       mute?: () => void;
       unMute?: () => void;
       setPlaybackRate?: (rate: number) => void;
+      getAvailableAudioTracks?: () => Array<Record<string, unknown>>;
+      setAudioTrack?: (track: unknown) => void;
+      setOption?: (module: string, option: string, value: unknown) => void;
     };
     let player: YtPlayer | null = null;
     playerRef.current = null;
@@ -3614,6 +3814,8 @@ function PlayerView({
           modestbranding: 1,
           playsinline: 1,
           mute: 0,
+          hl: lang,
+          cc_lang_pref: lang,
           origin: window.location.origin,
         },
         events: {
@@ -3622,6 +3824,7 @@ function PlayerView({
             playerRef.current = player;
             restoreSound(player, true);
             applyPlaybackRate(player, readAudioRate(video.id));
+            applyPreferredAudio(player, lang, autoDub);
             if (resumeAt > 5) player?.seekTo?.(resumeAt, true);
             try {
               const iframe = (player as YtPlayer & { getIframe?: () => HTMLIFrameElement }).getIframe?.();
@@ -3785,6 +3988,7 @@ function PlayerView({
       <div className="tf-player-bleed">
         <div
           className="tf-player-stage"
+          ref={setPlayerBox}
           style={{
             position: "relative",
             width: "100%",
@@ -3868,6 +4072,11 @@ function PlayerView({
                   video
                 </button>
               </div>
+              {autoDub ? (
+                <div style={{ position: "relative", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--tf-dim)", marginBottom: 10 }}>
+                  auto dub · {langLabel(lang)}
+                </div>
+              ) : null}
               <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 16 }}>
                 <button
                   aria-label={(shared && listen ? listen.clock : clock).paused ? "Play audio" : "Pause audio"}
@@ -4017,6 +4226,9 @@ function PlayerView({
                 watch on youtube
               </a>
             </div>
+          ) : null}
+          {!audioMode && !watchOnYoutube ? (
+            <VideoFullView enabled={!audioMode && !watchOnYoutube} stage={playerBox} videoId={video.id} />
           ) : null}
         </div>
       </div>
@@ -4264,6 +4476,22 @@ export default function App() {
       return false;
     }
   });
+  const [searchPrefs, setSearchPrefs] = useState<SearchPrefs>(() =>
+    typeof window === "undefined"
+      ? {
+          lang: "en",
+          autoDub: false,
+          type: "",
+          duration: "",
+          upload: "",
+          sort: "relevance",
+          hd: false,
+          subtitles: false,
+          creativeCommons: false,
+        }
+      : readSearchPrefs(),
+  );
+  const [geminiReady, setGeminiReady] = useState<boolean | null>(null);
   const [appliedQuery, setAppliedQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -4351,6 +4579,18 @@ export default function App() {
       // ignore
     }
   }
+
+  function writePrefs(next: SearchPrefs) {
+    setSearchPrefs(next);
+    writeSearchPrefs(next);
+  }
+
+  useEffect(() => {
+    fetch("/api/ai-status")
+      .then((res) => res.json())
+      .then((data) => setGeminiReady(Boolean(data.gemini)))
+      .catch(() => setGeminiReady(null));
+  }, []);
 
   function goPlaylist(playlist: Playlist) {
     setActiveVideo(null);
@@ -4442,7 +4682,7 @@ export default function App() {
       const topic = categoryHint ? `&topic=${encodeURIComponent(categoryHint)}` : "";
       const skip = watchedIdSet();
       const exclude = skip.size ? `&exclude=${encodeURIComponent([...skip].join(","))}` : "";
-      fetch(`/api/random?page=1&shorts=${includeShorts ? 1 : 0}${topic}${exclude}`, { signal: controller.signal })
+      fetch(`/api/random?page=1&${searchApiQuery(searchPrefs, includeShorts)}${topic}${exclude}`, { signal: controller.signal })
         .then((res) => res.json())
         .then((data) => {
           const incoming = Array.isArray(data.results) ? data.results : [];
@@ -4469,7 +4709,7 @@ export default function App() {
     setPlaylists([]);
     setHasMore(true);
 
-    const cacheKey = `${query.toLowerCase()}|shorts:${includeShorts ? 1 : 0}`;
+    const cacheKey = `${query.toLowerCase()}|${prefsFingerprint(searchPrefs, includeShorts)}`;
     const cached = SEARCH_CACHE.get(cacheKey);
     if (cached?.length) {
       setFeed(cached);
@@ -4480,7 +4720,7 @@ export default function App() {
 
     const timer = window.setTimeout(async () => {
       try {
-        const shorts = `shorts=${includeShorts ? 1 : 0}`;
+        const shorts = searchApiQuery(searchPrefs, includeShorts);
         const searchRes = await fetch(`/api/search?q=${encodeURIComponent(query)}&page=1&${shorts}`, {
           signal: controller.signal,
         });
@@ -4513,7 +4753,7 @@ export default function App() {
             if (searchVideos.length) bag[query.toLowerCase()] = searchVideos;
             for (const [key, videos] of Object.entries(bag)) {
               if (Array.isArray(videos) && videos.length) {
-                SEARCH_CACHE.set(`${key.toLowerCase()}|shorts:${includeShorts ? 1 : 0}`, videos);
+                SEARCH_CACHE.set(`${key.toLowerCase()}|${prefsFingerprint(searchPrefs, includeShorts)}`, videos);
               }
             }
             setPredictions(
@@ -4557,7 +4797,7 @@ export default function App() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [query, categoryHint, includeShorts, history]);
+  }, [query, categoryHint, includeShorts, history, searchPrefs]);
 
   async function loadMore() {
     if (!useRemoteFeed || loadingMoreRef.current || !hasMore || isSearching) return;
@@ -4565,7 +4805,7 @@ export default function App() {
     setLoadingMore(true);
     const nextPage = pageRef.current + 1;
     try {
-      const shorts = `shorts=${includeShorts ? 1 : 0}`;
+      const shorts = searchApiQuery(searchPrefs, includeShorts);
       const known = watchedIdList([...feed, ...localResults].map((item) => item.id)).join(",");
       const path = query.length >= 2
         ? `/api/search?q=${encodeURIComponent(query)}&page=${nextPage}&${shorts}`
@@ -4660,10 +4900,12 @@ export default function App() {
     })();
     return raw
       .map((video) => {
-        rememberChannelThumb(video.channel, video.channelThumb);
-        return { ...video, channelThumb: video.channelThumb || channelThumbOf(video) };
+        rememberChannelThumb(video.channel, (video as Video).channelThumb);
+        return { ...video, channelThumb: (video as Video).channelThumb || channelThumbOf(video) };
       })
       .filter((video) => {
+        if (searchPrefs.type === "shorts") return isShort(video);
+        if (searchPrefs.type === "video" && isShort(video)) return false;
         if (!includeShorts && isShort(video)) return false;
         if (query.length < 2 && !matchesCategory(video, activeCategory)) return false;
         if (query.length < 2 && watchedIdSet([listening?.id || ""]).has(video.id)) return false;
@@ -4834,6 +5076,9 @@ export default function App() {
       </header>
 
       <main className="tf-main">
+        {query.length >= 2 ? (
+          <SearchFilterChips prefs={searchPrefs} onChange={writePrefs} />
+        ) : null}
         {appliedQuery && query.length >= 2 && searchMode === "video" && (
           <div style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--tf-dim)", marginBottom: 16 }}>
             showing closest results for "{appliedQuery}"
@@ -4907,6 +5152,8 @@ export default function App() {
           }
           onOpenCourse={goPlaylist}
           preferAudio={audioOnly}
+          lang={searchPrefs.lang}
+          autoDub={searchPrefs.autoDub}
       />
     ) : page === "playlist" && activePlaylist ? (
       <div className={docked ? "tf-page-docked" : undefined}>
@@ -4928,6 +5175,9 @@ export default function App() {
           onAudioOnly={writeAudioOnly}
           includeShorts={includeShorts}
           onIncludeShorts={writeIncludeShorts}
+          prefs={searchPrefs}
+          onPrefs={writePrefs}
+          geminiReady={geminiReady}
           onBack={goHome}
         />
       </div>
@@ -4956,6 +5206,8 @@ export default function App() {
       queue={watchQueue}
       docked={docked}
       stage={playerStage}
+      lang={searchPrefs.lang}
+      autoDub={searchPrefs.autoDub}
       onAdvance={(next) => {
         setListening(next);
         if (!docked) openVideo(next, watchQueue, { takeover: true });

@@ -1,4 +1,5 @@
 import http from "node:http";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { URL } from "node:url";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -23,6 +24,177 @@ const DATA_DIR = process.env.VERCEL
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || "").trim();
 
 const PORT = Number(process.env.API_PORT || 8787);
+const localeAls = new AsyncLocalStorage();
+
+function regionForLang(hl) {
+  const map = {
+    en: "US",
+    hi: "IN",
+    ta: "IN",
+    te: "IN",
+    bn: "IN",
+    es: "ES",
+    pt: "BR",
+    fr: "FR",
+    de: "DE",
+    ja: "JP",
+    ko: "KR",
+    zh: "CN",
+    ar: "SA",
+  };
+  return map[String(hl || "en").split("-")[0]] || "US";
+}
+
+function currentLocale() {
+  return localeAls.getStore() || { hl: "en", gl: "US" };
+}
+
+function localeFromRequest(url, body = {}) {
+  const rawHl = String(url.searchParams.get("hl") || body.hl || "en");
+  const hl = rawHl.replace(/[^a-zA-Z-]/g, "").slice(0, 8) || "en";
+  const rawGl = String(url.searchParams.get("gl") || body.gl || regionForLang(hl));
+  const gl = rawGl.replace(/[^a-zA-Z]/g, "").slice(0, 8) || regionForLang(hl);
+  return { hl, gl };
+}
+
+function encodeVarint(value) {
+  const bytes = [];
+  let n = value >>> 0;
+  while (n > 127) {
+    bytes.push((n & 0x7f) | 0x80);
+    n >>>= 7;
+  }
+  bytes.push(n);
+  return bytes;
+}
+
+function encodeKey(field, wire) {
+  return encodeVarint((field << 3) | wire);
+}
+
+export function encodeSearchParams(filters = {}) {
+  const nested = [];
+  const uploadMap = { hour: 1, today: 2, week: 3, month: 4, year: 5 };
+  const typeMap = { video: 1, channel: 2, playlist: 3, movie: 4 };
+  const durationMap = { short: 1, medium: 2, long: 3 };
+  const sortMap = { rating: 1, date: 2, views: 3 };
+  if (uploadMap[filters.upload]) {
+    nested.push(...encodeKey(1, 0), ...encodeVarint(uploadMap[filters.upload]));
+  }
+  if (typeMap[filters.type]) {
+    nested.push(...encodeKey(2, 0), ...encodeVarint(typeMap[filters.type]));
+  }
+  if (durationMap[filters.duration]) {
+    nested.push(...encodeKey(3, 0), ...encodeVarint(durationMap[filters.duration]));
+  }
+  if (filters.hd) nested.push(...encodeKey(4, 0), ...encodeVarint(1));
+  if (filters.subtitles || filters.cc) nested.push(...encodeKey(5, 0), ...encodeVarint(1));
+  if (filters.creativeCommons) nested.push(...encodeKey(6, 0), ...encodeVarint(1));
+  const body = [];
+  if (sortMap[filters.sort]) {
+    body.push(...encodeKey(1, 0), ...encodeVarint(sortMap[filters.sort]));
+  }
+  if (nested.length) {
+    body.push(...encodeKey(2, 2), ...encodeVarint(nested.length), ...nested);
+  }
+  return body.length ? Buffer.from(body).toString("base64") : "";
+}
+
+function parseSearchFilters(url) {
+  const type = String(url.searchParams.get("type") || "");
+  const duration = String(url.searchParams.get("duration") || "");
+  const upload = String(url.searchParams.get("upload") || url.searchParams.get("date") || "");
+  const sort = String(url.searchParams.get("sort") || "relevance");
+  return {
+    type: ["video", "shorts", "playlist"].includes(type) ? type : "",
+    duration: ["short", "medium", "long"].includes(duration) ? duration : "",
+    upload: ["today", "week", "month", "year"].includes(upload) ? upload : "",
+    sort: ["relevance", "date", "views"].includes(sort) ? sort : "relevance",
+    hd: url.searchParams.get("hd") === "1",
+    subtitles: url.searchParams.get("cc") === "1" || url.searchParams.get("subtitles") === "1",
+    creativeCommons: url.searchParams.get("creativecommons") === "1",
+    includeShorts: url.searchParams.get("shorts") === "1",
+  };
+}
+
+function postedWithin(posted, upload) {
+  if (!upload) return true;
+  const value = String(posted || "").toLowerCase().trim();
+  if (!value) return true;
+  if (/just now|seconds? ago|minutes? ago/.test(value)) return true;
+  const hours = value.match(/(\d+)\s+hours? ago/);
+  if (hours) return upload === "today" || upload === "week" || upload === "month" || upload === "year";
+  if (/today|hour ago|hours ago/.test(value)) return true;
+  const days = value.match(/(\d+)\s+days? ago/);
+  if (days) {
+    const n = Number(days[1]);
+    if (upload === "today") return n < 1;
+    if (upload === "week") return n <= 7;
+    if (upload === "month") return n <= 31;
+    return true;
+  }
+  if (/yesterday/.test(value)) return upload !== "today";
+  const weeks = value.match(/(\d+)\s+weeks? ago/);
+  if (weeks) {
+    const n = Number(weeks[1]);
+    if (upload === "today" || upload === "week") return n <= 1 && upload === "week";
+    if (upload === "month") return n <= 5;
+    return true;
+  }
+  const months = value.match(/(\d+)\s+months? ago/);
+  if (months) {
+    if (upload === "year") return Number(months[1]) <= 12;
+    return false;
+  }
+  if (/year/.test(value)) return false;
+  return true;
+}
+
+function matchesDurationFilter(video, duration) {
+  if (!duration) return true;
+  const seconds = durationSeconds(video.duration);
+  if (!seconds) return true;
+  if (duration === "short") return seconds < 180;
+  if (duration === "medium") return seconds >= 180 && seconds <= 1200;
+  if (duration === "long") return seconds > 1200;
+  return true;
+}
+
+function applyClientFilters(videos, filters) {
+  return (videos || []).filter((video) => {
+    if (filters.type === "shorts") return isShort(video) && matchesDurationFilter(video, filters.duration) && postedWithin(video.posted, filters.upload);
+    if (filters.type === "video" && isShort(video) && !filters.includeShorts) return false;
+    if (!filters.includeShorts && filters.type !== "shorts" && isShort(video)) return false;
+    return matchesDurationFilter(video, filters.duration) && postedWithin(video.posted, filters.upload);
+  });
+}
+
+function innertubeFilterParams(filters) {
+  const type = filters.type === "playlist" ? "playlist" : filters.type === "shorts" ? "video" : filters.type === "video" ? "video" : "";
+  const duration = filters.type === "shorts" ? "short" : filters.duration;
+  return encodeSearchParams({
+    type,
+    duration,
+    upload: filters.upload,
+    sort: filters.sort,
+    hd: filters.hd,
+    subtitles: filters.subtitles,
+    creativeCommons: filters.creativeCommons,
+  });
+}
+
+function filtersKey(filters) {
+  return [
+    filters.type || "any",
+    filters.duration || "any",
+    filters.upload || "any",
+    filters.sort || "relevance",
+    filters.hd ? "hd" : "",
+    filters.subtitles ? "cc" : "",
+    filters.creativeCommons ? "cr" : "",
+    filters.includeShorts ? "s1" : "s0",
+  ].join(":");
+}
 
 const INVIDIOUS_INSTANCES = [
   "https://invidious.nerdvpn.de",
@@ -521,13 +693,27 @@ function topicsForHint(hint) {
   return TOPIC_FEEDS[key] || [hint];
 }
 
-async function searchInvidious(query, page = 1) {
+async function searchInvidious(query, page = 1, filters = {}) {
   for (const instance of INVIDIOUS_INSTANCES) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
     try {
+      const params = new URLSearchParams({
+        q: query,
+        type: filters.type === "playlist" ? "playlist" : "video",
+        page: String(page),
+      });
+      if (filters.sort === "date") params.set("sort_by", "upload_date");
+      else if (filters.sort === "views") params.set("sort_by", "view_count");
+      if (filters.upload) params.set("date", filters.upload);
+      if (filters.duration) params.set("duration", filters.duration === "short" ? "short" : filters.duration);
+      const features = [];
+      if (filters.hd) features.push("hd");
+      if (filters.subtitles) features.push("subtitles");
+      if (filters.creativeCommons) features.push("creative_commons");
+      if (features.length) params.set("features", features.join(","));
       const res = await fetch(
-        `${instance}/api/v1/search?q=${encodeURIComponent(query)}&type=video&page=${page}`,
+        `${instance}/api/v1/search?${params.toString()}`,
         {
           headers: { Accept: "application/json" },
           signal: controller.signal,
@@ -619,10 +805,11 @@ function extractInnerTubeVideos(payload) {
 async function innertube(endpoint, body, clientName = "WEB") {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 4000);
+  const locale = currentLocale();
   const client =
     clientName === "ANDROID"
-      ? { clientName: "ANDROID", clientVersion: "19.47.37", hl: "en", gl: "US" }
-      : { clientName: "WEB", clientVersion: "2.20241210.01.00", hl: "en", gl: "US" };
+      ? { clientName: "ANDROID", clientVersion: "19.47.37", hl: locale.hl, gl: locale.gl }
+      : { clientName: "WEB", clientVersion: "2.20241210.01.00", hl: locale.hl, gl: locale.gl };
   try {
     const res = await fetch(`https://www.youtube.com/youtubei/v1/${endpoint}?prettyPrint=false`, {
       method: "POST",
@@ -1011,7 +1198,7 @@ async function findCoursesForVideo(videoId) {
   return order.map((id) => byId.get(id)).filter(Boolean).slice(0, 3);
 }
 
-async function searchPlaylists(topic, page = 1) {
+async function searchPlaylists(topic, page = 1, filters = {}) {
   const variants = [
     `${topic} full course playlist`,
     `${topic} beginner course playlist`,
@@ -1020,11 +1207,17 @@ async function searchPlaylists(topic, page = 1) {
     `${topic} tutorial playlist`,
   ];
   const query = `${variants[(page - 1) % variants.length]}${page > variants.length ? ` ${page}` : ""}`;
-  const key = `playlists:${query}:${page}`;
+  const locale = currentLocale();
+  const key = `playlists:${query}:${page}:${locale.hl}:${filtersKey({ ...filters, type: "playlist" })}`;
   const cached = searchCache.get(key);
   if (cached && Date.now() - cached.ts < SEARCH_TTL_MS) return cached.results;
 
-  const data = await innertube("search", { query, params: "EgIQAw==" });
+  const params = encodeSearchParams({
+    type: "playlist",
+    sort: filters.sort,
+    upload: filters.upload,
+  }) || "EgIQAw==";
+  const data = await innertube("search", { query, params });
   let playlists = data ? extractPlaylists(data) : [];
   if (!playlists.length) {
     const unfiltered = await innertube("search", { query });
@@ -1153,26 +1346,33 @@ async function playlistVideos(playlistId, includeShorts = false, continuation = 
   };
 }
 
-async function searchInnerTube(query, page = 1) {
-  const data = await innertube("search", { query: page > 1 ? `${query} ${page}` : query });
+async function searchInnerTube(query, page = 1, filters = {}) {
+  const payload = { query: page > 1 ? `${query} ${page}` : query };
+  const params = innertubeFilterParams(filters);
+  if (params) payload.params = params;
+  const data = await innertube("search", payload);
   if (!data) return null;
   const videos = extractInnerTubeVideos(data).map((video) => withCategory(video, query));
   return videos.length ? videos : null;
 }
 
-async function searchRaw(query, page = 1) {
-  const inner = await searchInnerTube(query, page);
+async function searchRaw(query, page = 1, filters = {}) {
+  const inner = await searchInnerTube(query, page, filters);
   if (inner?.length) return inner;
-  return (await searchInvidious(query, page)) || [];
+  return (await searchInvidious(query, page, filters)) || [];
 }
 
-async function searchVideos(query, page = 1, includeShorts = false) {
-  const key = `search:${query}:${page}:shorts:${includeShorts ? 1 : 0}`;
+async function searchVideos(query, page = 1, includeShorts = false, filters = {}) {
+  const nextFilters = { ...filters, includeShorts: filters.type === "shorts" ? true : includeShorts };
+  const locale = currentLocale();
+  const key = `search:${query}:${page}:${locale.hl}:${filtersKey(nextFilters)}`;
   const cached = searchCache.get(key);
   if (cached && Date.now() - cached.ts < SEARCH_TTL_MS) return cached.results;
 
-  const results = filterPlayable(await searchRaw(query, page), 16, query, false, includeShorts);
-  searchCache.set(key, { results, ts: Date.now() });
+  const raw = await searchRaw(query, page, nextFilters);
+  const filtered = applyClientFilters(filterPlayable(raw, 24, query, false, nextFilters.includeShorts), nextFilters);
+  const results = filtered.slice(0, 16);
+  if (results.length) searchCache.set(key, { results, ts: Date.now() });
   return results;
 }
 
@@ -1346,10 +1546,10 @@ function predictQueries(input) {
   return [...new Set([q, ...scored, ...extras].map(normalizeQuery))].slice(0, 4);
 }
 
-async function predictiveFetch(input, includeShorts = false) {
+async function predictiveFetch(input, includeShorts = false, filters = {}) {
   const suggestions = predictQueries(input);
   const entries = await Promise.all(
-    suggestions.map(async (suggestion) => [suggestion, await searchVideos(suggestion, 1, includeShorts)]),
+    suggestions.map(async (suggestion) => [suggestion, await searchVideos(suggestion, 1, includeShorts, filters)]),
   );
   return {
     suggestions,
@@ -1422,10 +1622,11 @@ async function watchPlayerResponse(videoId) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 6000);
   try {
-    const res = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=en`, {
+    const locale = currentLocale();
+    const res = await fetch(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=${encodeURIComponent(locale.hl)}`, {
       headers: {
         "User-Agent": USER_AGENT,
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": `${locale.hl}-${locale.gl},${locale.hl};q=0.9`,
       },
       signal: controller.signal,
     });
@@ -1824,7 +2025,10 @@ async function videoTranscript(videoId) {
   const watch = await watchPlayerResponse(videoId);
   const fromWatch = captionTracksFromPlayer(watch);
   const tracks = fromWatch.length ? fromWatch : captionTracksFromPlayer(await innertube("player", { videoId }));
+  const want = currentLocale().hl || "en";
   const preferred =
+    tracks.find((track) => new RegExp(`^${want}`, "i").test(track.languageCode || "") && !track.kind) ||
+    tracks.find((track) => new RegExp(`^${want}`, "i").test(track.languageCode || "")) ||
     tracks.find((track) => /^en/i.test(track.languageCode || "") && !track.kind) ||
     tracks.find((track) => /^en/i.test(track.languageCode || "")) ||
     tracks[0];
@@ -1988,6 +2192,112 @@ async function askLanguageModel(title, question, context, history = []) {
   return "";
 }
 
+function geminiKey() {
+  return process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || "";
+}
+
+function languageName(hl) {
+  const names = {
+    en: "English",
+    hi: "Hindi",
+    es: "Spanish",
+    pt: "Portuguese",
+    fr: "French",
+    de: "German",
+    ja: "Japanese",
+    ko: "Korean",
+    zh: "Chinese",
+    ar: "Arabic",
+    ta: "Tamil",
+    te: "Telugu",
+    bn: "Bengali",
+  };
+  return names[hl] || hl || "English";
+}
+
+async function geminiGenerate(model, body) {
+  const key = geminiKey();
+  if (!key) return null;
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+function textFromGemini(data) {
+  return data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+}
+
+const dubCache = new Map();
+const DUB_TTL_MS = 60 * 60 * 1000;
+
+async function translateTranscript(transcript, hl) {
+  const source = (transcript.segments || [])
+    .filter((item) => item.text)
+    .slice(0, 80)
+    .map((item) => ({ start: Number(item.start) || 0, text: String(item.text).slice(0, 240) }));
+  if (!source.length && transcript.text) {
+    const bits = String(transcript.text).split(/(?<=[.?!])\s+/).filter(Boolean).slice(0, 40);
+    bits.forEach((text, index) => source.push({ start: index * 8, text: text.slice(0, 240) }));
+  }
+  if (!source.length) return { segments: [], needsKey: false };
+
+  const key = geminiKey();
+  if (!key) return { segments: source, needsKey: true };
+
+  const data = await geminiGenerate("gemini-2.0-flash", {
+    contents: [
+      {
+        parts: [
+          {
+            text: `Translate these lecture caption segments into ${languageName(hl)} (${hl}). Keep technical terms when there is no common equivalent. Return ONLY a JSON array of objects with numeric "start" and string "text". Do not add commentary.\n\n${JSON.stringify(source)}`,
+          },
+        ],
+      },
+    ],
+  });
+  const raw = textFromGemini(data).replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length) {
+      return {
+        segments: parsed
+          .map((item) => ({ start: Number(item.start) || 0, text: String(item.text || "").trim() }))
+          .filter((item) => item.text),
+        needsKey: false,
+      };
+    }
+  } catch {
+    // keep source
+  }
+  return { segments: source, needsKey: false };
+}
+
+async function geminiSpeech(text, hl) {
+  const clipped = String(text || "").slice(0, 800);
+  if (!clipped || !geminiKey()) return null;
+  const models = ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"];
+  for (const model of models) {
+    const data = await geminiGenerate(model, {
+      contents: [{ parts: [{ text: `Speak this lecture excerpt naturally in ${languageName(hl)}:\n${clipped}` }] }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: hl === "en" ? "Kore" : "Charon" } },
+        },
+      },
+    });
+    const part = data?.candidates?.[0]?.content?.parts?.find((item) => item.inlineData?.data);
+    if (part?.inlineData?.data) {
+      return { audio: part.inlineData.data, mime: part.inlineData.mimeType || "audio/mp3" };
+    }
+  }
+  return null;
+}
+
 function readJsonBody(req) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -2127,24 +2437,30 @@ export async function handleRequest(req, res) {
     }
 
     const page = Math.max(1, Number(url.searchParams.get("page") || 1) || 1);
-    const includeShorts = url.searchParams.get("shorts") === "1";
+    const filters = parseSearchFilters(url);
+    const includeShorts = filters.type === "shorts" ? true : filters.type === "video" ? false : filters.includeShorts;
 
     try {
-      const intent = understandQuery(query);
-      if (intent.mode === "playlist") {
-        const playlists = await searchPlaylists(intent.topic, page);
-        sendJson(res, 200, {
-          mode: "playlist",
-          intent,
-          playlists,
-          results: [],
-          page,
-          hasMore: playlists.length > 0,
-        });
-        return;
-      }
-      const results = await searchVideos(query, page, includeShorts);
-      sendJson(res, 200, { mode: "video", intent, playlists: [], results, page, hasMore: results.length > 0 });
+      await localeAls.run(localeFromRequest(url), async () => {
+        const intent = understandQuery(query);
+        const forcePlaylist = filters.type === "playlist";
+        const forceVideo = filters.type === "video" || filters.type === "shorts";
+        if (forcePlaylist || (!forceVideo && intent.mode === "playlist")) {
+          const playlists = await searchPlaylists(intent.topic, page, filters);
+          sendJson(res, 200, {
+            mode: "playlist",
+            intent,
+            playlists,
+            results: [],
+            page,
+            hasMore: playlists.length > 0,
+            filters,
+          });
+          return;
+        }
+        const results = await searchVideos(query, page, includeShorts, filters);
+        sendJson(res, 200, { mode: "video", intent, playlists: [], results, page, hasMore: results.length > 0, filters });
+      });
     } catch {
       sendJson(res, 500, { error: "Search failed. Stay on this site and try again.", results: [], playlists: [], hasMore: false });
     }
@@ -2160,7 +2476,7 @@ export async function handleRequest(req, res) {
     const includeShorts = url.searchParams.get("shorts") === "1";
 
     try {
-      const results = await relatedVideos(
+      const results = await localeAls.run(localeFromRequest(url), () => relatedVideos(
         {
           id: (url.searchParams.get("id") || "").trim(),
           title: (url.searchParams.get("title") || "").trim(),
@@ -2169,7 +2485,7 @@ export async function handleRequest(req, res) {
         exclude,
         page,
         includeShorts,
-      );
+      ));
       sendJson(res, 200, { results, page, hasMore: results.length > 0 });
     } catch {
       sendJson(res, 500, { error: "Recommendations failed.", results: [], hasMore: false });
@@ -2187,7 +2503,9 @@ export async function handleRequest(req, res) {
     const topicHint = (url.searchParams.get("topic") || "").trim();
 
     try {
-      const results = await randomVideos(exclude, page, includeShorts, topicHint);
+      const results = await localeAls.run(localeFromRequest(url), () =>
+        randomVideos(exclude, page, includeShorts, topicHint),
+      );
       sendJson(res, 200, { results, page, hasMore: results.length > 0 });
     } catch {
       sendJson(res, 500, { error: "Recommendations failed.", results: [], hasMore: false });
@@ -2218,22 +2536,27 @@ export async function handleRequest(req, res) {
     }
 
     try {
-      const includeShorts = url.searchParams.get("shorts") === "1";
-      const intent = understandQuery(query);
-      if (intent.mode === "playlist") {
-        const playlists = await searchPlaylists(intent.topic);
-        sendJson(res, 200, {
-          query,
-          mode: "playlist",
-          intent,
-          suggestions: [`${intent.topic} course`, `${intent.topic} for beginners`, `${intent.topic} explained`].filter((item, index, list) => list.indexOf(item) === index && item !== intent.query),
-          results: {},
-          playlists,
-        });
-        return;
-      }
-      const payload = await predictiveFetch(query, includeShorts);
-      sendJson(res, 200, { query, mode: "video", intent, playlists: [], ...payload });
+      const filters = parseSearchFilters(url);
+      const includeShorts = filters.type === "shorts" ? true : filters.type === "video" ? false : filters.includeShorts;
+      await localeAls.run(localeFromRequest(url), async () => {
+        const intent = understandQuery(query);
+        const forcePlaylist = filters.type === "playlist";
+        const forceVideo = filters.type === "video" || filters.type === "shorts";
+        if (forcePlaylist || (!forceVideo && intent.mode === "playlist")) {
+          const playlists = await searchPlaylists(intent.topic, 1, filters);
+          sendJson(res, 200, {
+            query,
+            mode: "playlist",
+            intent,
+            suggestions: [`${intent.topic} course`, `${intent.topic} for beginners`, `${intent.topic} explained`].filter((item, index, list) => list.indexOf(item) === index && item !== intent.query),
+            results: {},
+            playlists,
+          });
+          return;
+        }
+        const payload = await predictiveFetch(query, includeShorts, filters);
+        sendJson(res, 200, { query, mode: "video", intent, playlists: [], ...payload });
+      });
     } catch {
       sendJson(res, 500, { suggestions: [], results: {} });
     }
@@ -2322,6 +2645,92 @@ export async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === "GET" && (url.pathname === "/api/ai-status" || url.pathname === "/ai-status")) {
+    sendJson(res, 200, {
+      gemini: Boolean(geminiKey()),
+      groq: Boolean(process.env.GROQ_API_KEY),
+      openai: Boolean(process.env.OPENAI_API_KEY),
+      tts: Boolean(geminiKey()),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && (url.pathname === "/api/dub" || url.pathname === "/dub")) {
+    const body = await readJsonBody(req);
+    const id = String(body.id || "").trim();
+    const locale = localeFromRequest(url, body);
+    if (!id) {
+      sendJson(res, 400, { error: "Missing video id", segments: [] });
+      return;
+    }
+    try {
+      await localeAls.run(locale, async () => {
+        const cacheKey = `${id}:${locale.hl}`;
+        const cached = dubCache.get(cacheKey);
+        if (cached && Date.now() - cached.ts < DUB_TTL_MS) {
+          sendJson(res, 200, cached);
+          return;
+        }
+        const transcript = await videoTranscript(id);
+        if (!transcript.text) {
+          const payload = {
+            available: false,
+            gemini: Boolean(geminiKey()),
+            tts: Boolean(geminiKey()),
+            needsKey: !geminiKey(),
+            segments: [],
+            error: "No captions to translate. YouTube dubbed audio may still play if the lecture has it.",
+            ts: Date.now(),
+          };
+          sendJson(res, 200, payload);
+          return;
+        }
+        const translated = await translateTranscript(transcript, locale.hl);
+        const payload = {
+          available: translated.segments.length > 0,
+          gemini: Boolean(geminiKey()),
+          tts: Boolean(geminiKey()),
+          needsKey: Boolean(translated.needsKey),
+          segments: translated.segments,
+          source: transcript.source || "transcript",
+          hl: locale.hl,
+          error: translated.error || "",
+          ts: Date.now(),
+        };
+        if (payload.available) dubCache.set(cacheKey, payload);
+        sendJson(res, 200, payload);
+      });
+    } catch {
+      sendJson(res, 500, { error: "Dub failed", segments: [] });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && (url.pathname === "/api/dub-speech" || url.pathname === "/dub-speech")) {
+    const body = await readJsonBody(req);
+    const text = String(body.text || "").trim();
+    const locale = localeFromRequest(url, body);
+    if (!text) {
+      sendJson(res, 400, { audio: "", error: "Missing text" });
+      return;
+    }
+    if (!geminiKey()) {
+      sendJson(res, 200, { audio: "", needsKey: true, fallback: "speechSynthesis" });
+      return;
+    }
+    try {
+      const spoken = await geminiSpeech(text, locale.hl);
+      if (spoken) {
+        sendJson(res, 200, { ...spoken, gemini: true });
+        return;
+      }
+      sendJson(res, 200, { audio: "", fallback: "speechSynthesis", gemini: true });
+    } catch {
+      sendJson(res, 200, { audio: "", fallback: "speechSynthesis" });
+    }
+    return;
+  }
+
   if (req.method === "GET" && (url.pathname === "/api/transcript" || url.pathname === "/transcript")) {
     const id = (url.searchParams.get("id") || "").trim();
     if (!id) {
@@ -2329,7 +2738,7 @@ export async function handleRequest(req, res) {
       return;
     }
     try {
-      const transcript = await videoTranscript(id);
+      const transcript = await localeAls.run(localeFromRequest(url), () => videoTranscript(id));
       sendJson(res, 200, {
         available: Boolean(transcript.text),
         chars: transcript.text.length,
