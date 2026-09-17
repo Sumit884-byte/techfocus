@@ -378,36 +378,30 @@ body {
   background: #000;
 }
 
-.tf-fullview-btn {
-  position: fixed;
-  z-index: 88;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border-radius: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(12, 12, 14, 0.78);
-  color: #e5e7eb;
-  cursor: pointer;
-  backdrop-filter: blur(8px);
-}
-
 .tf-watch {
   isolation: isolate;
 }
 
 .tf-watch-header {
   z-index: 82;
+  justify-content: flex-start;
+  gap: clamp(12px, 3vw, 40px);
 }
 
 .tf-watch-header-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
+  gap: clamp(8px, 1.2vw, 14px);
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.tf-watch-header .tf-crumb {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tf-player-main {
@@ -424,13 +418,28 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px 20px;
+  gap: 8px 12px;
   min-width: 0;
 }
 
 .tf-watch-meta-row > .tf-video-meta {
-  flex: 1 1 220px;
-  min-width: 0;
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
+}
+
+.tf-watch-meta-row .tf-video-meta-channel {
+  flex: 0 1 auto;
+  max-width: min(18rem, 52vw);
+}
+
+.tf-watch-meta-row > .tf-playlist-link {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .tf-autoplay-next {
@@ -444,6 +453,10 @@ body {
   align-items: center;
   gap: 8px;
   margin-bottom: 28px;
+}
+
+.tf-watch-actions .tf-skip-action {
+  display: none;
 }
 
 .tf-watch-action {
@@ -526,6 +539,83 @@ body {
 
 .tf-listen-controls {
   gap: 16px;
+}
+
+.tf-listen-skip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tf-skip-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--tf-line);
+  border-radius: 50%;
+  background: none;
+  color: var(--tf-text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.tf-skip-btn:hover {
+  border-color: var(--tf-dim);
+  color: var(--tf-accent);
+}
+
+.tf-yt-host,
+.tf-player-stage {
+  position: relative;
+}
+
+.tf-skip-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 72px;
+  padding: 0 12px 10px 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.tf-skip-overlay.is-on {
+  opacity: 1;
+}
+
+.tf-skip-pause-gap {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  pointer-events: none;
+}
+
+.tf-skip-overlay .tf-skip-btn {
+  pointer-events: none;
+  width: 56px;
+  height: 56px;
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(12, 12, 14, 0.72);
+  color: #e5e7eb;
+  backdrop-filter: blur(8px);
+}
+
+.tf-skip-overlay .tf-skip-btn svg {
+  width: 34px;
+  height: 34px;
+}
+
+.tf-skip-overlay.is-on .tf-skip-btn {
+  pointer-events: auto;
 }
 
 .tf-listen-scrub {
@@ -1071,11 +1161,38 @@ button:hover > .tf-card {
     flex: 1 1 12rem;
   }
 
+  .tf-watch-meta-row .tf-video-meta {
+    width: auto;
+  }
+
+  .tf-watch-meta-row .tf-video-meta-channel {
+    flex: 0 1 auto;
+    max-width: min(18rem, 70vw);
+  }
+
   .tf-watch-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 20px;
+  }
+
+  .tf-skip-overlay {
+    display: none;
+  }
+
+  .tf-watch-actions .tf-skip-action {
+    display: inline-flex;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    gap: 0;
+  }
+
+  .tf-watch-actions .tf-skip-action > span {
+    display: none;
   }
 
   .tf-autoplay-next {
@@ -1170,7 +1287,7 @@ button:hover > .tf-card {
 .tf-video-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   font-family: var(--mono);
   font-size: 11px;

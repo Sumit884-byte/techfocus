@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, createContext, useContext, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import AutoDubListen from "./AutoDubListen";
 import SearchFilterChips from "./SearchFilterChips";
 import VideoFullView, { exitFullView } from "./VideoFullView";
@@ -313,6 +314,112 @@ function PauseIcon() {
       <rect x="6" y="4" width="4" height="16" />
       <rect x="14" y="4" width="4" height="16" />
     </svg>
+  );
+}
+
+function SkipBackIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M11 6a7 7 0 1 1-6.1 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M4.2 3.8v5h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <text x="12.2" y="15.6" textAnchor="middle" fill="currentColor" fontSize="7.2" fontFamily="ui-monospace, monospace">
+        10
+      </text>
+    </svg>
+  );
+}
+
+function SkipForwardIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M13 6a7 7 0 1 0 6.1 3.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M19.8 3.8v5h-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <text x="11.8" y="15.6" textAnchor="middle" fill="currentColor" fontSize="7.2" fontFamily="ui-monospace, monospace">
+        10
+      </text>
+    </svg>
+  );
+}
+
+function skipOverlayMount() {
+  const host = document.querySelector(".tf-yt-host") as HTMLElement | null;
+  if (host?.querySelector("iframe") && document.body.dataset.listenAudio !== "1") return host;
+  return document.querySelector(".tf-player-stage") as HTMLElement | null;
+}
+
+function VideoSkipOverlay({
+  enabled,
+  paused,
+  onBack,
+  onForward,
+}: {
+  enabled: boolean;
+  paused: boolean;
+  onBack: () => void;
+  onForward: () => void;
+}) {
+  const [mount, setMount] = useState<HTMLElement | null>(null);
+  const [hot, setHot] = useState(false);
+  const hideRef = useRef(0);
+
+  useEffect(() => {
+    if (!enabled) {
+      setMount(null);
+      return;
+    }
+    const sync = () => setMount(skipOverlayMount());
+    sync();
+    const timer = window.setInterval(sync, 400);
+    return () => window.clearInterval(timer);
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled || !mount) return;
+    const show = () => {
+      setHot(true);
+      window.clearTimeout(hideRef.current);
+      if (!paused) hideRef.current = window.setTimeout(() => setHot(false), 2800);
+    };
+    const hideSoon = () => {
+      if (paused) return;
+      window.clearTimeout(hideRef.current);
+      hideRef.current = window.setTimeout(() => setHot(false), 350);
+    };
+    const iframe = mount.querySelector("iframe");
+    mount.addEventListener("mouseenter", show);
+    mount.addEventListener("mouseleave", hideSoon);
+    iframe?.addEventListener("mouseenter", show);
+    iframe?.addEventListener("mouseleave", hideSoon);
+    return () => {
+      window.clearTimeout(hideRef.current);
+      mount.removeEventListener("mouseenter", show);
+      mount.removeEventListener("mouseleave", hideSoon);
+      iframe?.removeEventListener("mouseenter", show);
+      iframe?.removeEventListener("mouseleave", hideSoon);
+    };
+  }, [enabled, mount, paused]);
+
+  useEffect(() => {
+    if (paused) {
+      window.clearTimeout(hideRef.current);
+      setHot(true);
+    }
+  }, [paused]);
+
+  if (!enabled || !mount) return null;
+  const visible = paused || hot;
+
+  return createPortal(
+    <div className={`tf-skip-overlay${visible ? " is-on" : ""}`}>
+      <button type="button" className="tf-skip-btn" aria-label="Back 10 seconds" title="Back 10 seconds" onClick={onBack}>
+        <SkipBackIcon />
+      </button>
+      <span className="tf-skip-pause-gap" aria-hidden />
+      <button type="button" className="tf-skip-btn" aria-label="Forward 10 seconds" title="Forward 10 seconds" onClick={onForward}>
+        <SkipForwardIcon />
+      </button>
+    </div>,
+    mount,
   );
 }
 
@@ -1012,7 +1119,15 @@ function videoMetaParts(video: Video) {
 
 const VIDEO_META_CACHE = new Map<string, { views: string; posted: string }>();
 
-function VideoMetaLine({ video, className = "" }: { video: Video; className?: string }) {
+function VideoMetaLine({
+  video,
+  likes = "",
+  className = "",
+}: {
+  video: Video;
+  likes?: string;
+  className?: string;
+}) {
   const [filled, setFilled] = useState(() => VIDEO_META_CACHE.get(video.id) || { views: "", posted: "" });
 
   useEffect(() => {
@@ -1057,6 +1172,12 @@ function VideoMetaLine({ video, className = "" }: { video: Video; className?: st
         <span className="tf-video-meta-when" title={cleanMeta(video.posted)}>
           {posted.streamed ? <StreamIcon /> : posted.premiered ? <PremiereIcon /> : null}
           <span>{posted.text}</span>
+        </span>
+      ) : null}
+      {likes ? (
+        <span className="tf-video-meta-stat" title={`${likes} likes`}>
+          <LikeIcon />
+          <span>{compactViews(likes) || likes}</span>
         </span>
       ) : null}
     </div>
@@ -3200,18 +3321,22 @@ function PersistentAudio({
         }
         return;
       }
-      const hideVideo = docked || document.body.dataset.listenAudio === "1";
+      const listenHidden = document.body.dataset.listenAudio === "1";
+      const hideVideo = docked || listenHidden;
       if (hideVideo) {
+        const stageRect = !docked && stage ? stage.getBoundingClientRect() : null;
+        const width = stageRect && stageRect.width > 1 ? Math.max(1, Math.round(stageRect.width)) : 320;
+        const height = stageRect && stageRect.height > 1 ? Math.max(1, Math.round(stageRect.height)) : 180;
         host.style.top = "-220px";
         host.style.left = "0px";
-        host.style.width = "320px";
-        host.style.height = "180px";
+        host.style.width = `${width}px`;
+        host.style.height = `${height}px`;
         host.style.zIndex = "0";
         host.style.pointerEvents = "none";
         host.style.opacity = "0.01";
         host.style.clipPath = "none";
         try {
-          playerRef.current?.setSize?.(320, 180);
+          playerRef.current?.setSize?.(width, height);
         } catch {
           // ignore
         }
@@ -3253,6 +3378,7 @@ function PersistentAudio({
     const frame = window.setInterval(place, 400);
     window.addEventListener("resize", requestPlace);
     window.addEventListener("scroll", requestPlace, true);
+    window.addEventListener("tf-place-player", requestPlace);
     document.addEventListener("fullscreenchange", requestPlace);
     document.addEventListener("webkitfullscreenchange", requestPlace);
     window.visualViewport?.addEventListener("resize", requestPlace);
@@ -3263,6 +3389,7 @@ function PersistentAudio({
       window.clearInterval(frame);
       window.removeEventListener("resize", requestPlace);
       window.removeEventListener("scroll", requestPlace, true);
+      window.removeEventListener("tf-place-player", requestPlace);
       document.removeEventListener("fullscreenchange", requestPlace);
       document.removeEventListener("webkitfullscreenchange", requestPlace);
       window.visualViewport?.removeEventListener("resize", requestPlace);
@@ -3335,6 +3462,7 @@ function PersistentAudio({
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
+          fs: 1,
           hl: lang,
           cc_lang_pref: lang,
           origin: window.location.origin,
@@ -3738,10 +3866,46 @@ function PlayerView({
     writeWatchMode(video.id, listen ? "listen" : "video");
   }
 
+  function seekBy(offset: number) {
+    if (watchOnYoutube) return;
+    const live = shared && listen ? listen.clock : clock;
+    const duration = live.duration || durationSeconds(video.duration);
+    const next = Math.max(0, duration ? Math.min(duration, live.current + offset) : Math.max(0, live.current + offset));
+    if (shared && listen) {
+      listen.seek(next);
+      return;
+    }
+    playerRef.current?.seekTo?.(next, true);
+    setClock((current) => ({ ...current, current: next, paused: false }));
+    restoreSound(playerRef.current, true);
+  }
+
   useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.closest("input, textarea, select, [contenteditable='true']") || target.isContentEditable)) {
+        return;
+      }
+      if (event.key === "ArrowLeft" || event.key === "j" || event.key === "J") {
+        event.preventDefault();
+        seekBy(-10);
+        return;
+      }
+      if (event.key === "ArrowRight" || event.key === "l" || event.key === "L") {
+        event.preventDefault();
+        seekBy(10);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  useLayoutEffect(() => {
     document.body.dataset.listenAudio = audioMode && shared ? "1" : "0";
+    window.dispatchEvent(new Event("tf-place-player"));
     return () => {
       document.body.dataset.listenAudio = "0";
+      window.dispatchEvent(new Event("tf-place-player"));
     };
   }, [audioMode, shared]);
 
@@ -3901,6 +4065,7 @@ function PlayerView({
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
+          fs: 1,
           mute: 0,
           hl: lang,
           cc_lang_pref: lang,
@@ -4168,34 +4333,42 @@ function PlayerView({
                 </div>
               ) : null}
               <div className="tf-listen-controls">
-                <button
-                  aria-label={(shared && listen ? listen.clock : clock).paused ? "Play audio" : "Pause audio"}
-                  onClick={() => {
-                    const paused = (shared && listen ? listen.clock : clock).paused;
-                    if (shared && listen) {
-                      if (paused) listen.play();
-                      else listen.pause();
-                      return;
-                    }
-                    if (paused) restoreSound(playerRef.current, true);
-                    else playerRef.current?.pauseVideo?.();
-                  }}
-                  style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: "50%",
-                    border: "none",
-                    background: "var(--tf-accent)",
-                    color: "#111827",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    flexShrink: 0,
-                  }}
-                >
-                  {(shared && listen ? listen.clock : clock).paused ? <PlayIcon /> : <PauseIcon />}
-                </button>
+                <div className="tf-listen-skip">
+                  <button type="button" className="tf-skip-btn" aria-label="Back 10 seconds" title="Back 10 seconds" onClick={() => seekBy(-10)}>
+                    <SkipBackIcon />
+                  </button>
+                  <button
+                    aria-label={(shared && listen ? listen.clock : clock).paused ? "Play audio" : "Pause audio"}
+                    onClick={() => {
+                      const paused = (shared && listen ? listen.clock : clock).paused;
+                      if (shared && listen) {
+                        if (paused) listen.play();
+                        else listen.pause();
+                        return;
+                      }
+                      if (paused) restoreSound(playerRef.current, true);
+                      else playerRef.current?.pauseVideo?.();
+                    }}
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: "50%",
+                      border: "none",
+                      background: "var(--tf-accent)",
+                      color: "#111827",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {(shared && listen ? listen.clock : clock).paused ? <PlayIcon /> : <PauseIcon />}
+                  </button>
+                  <button type="button" className="tf-skip-btn" aria-label="Forward 10 seconds" title="Forward 10 seconds" onClick={() => seekBy(10)}>
+                    <SkipForwardIcon />
+                  </button>
+                </div>
                 <div className="tf-listen-scrub">
                   <input
                     type="range"
@@ -4317,9 +4490,13 @@ function PlayerView({
               </a>
             </div>
           ) : null}
-          {!audioMode && !watchOnYoutube ? (
-            <VideoFullView enabled={!audioMode && !watchOnYoutube} stage={playerBox} videoId={video.id} />
-          ) : null}
+          {!audioMode && !watchOnYoutube ? <VideoFullView enabled /> : null}
+          <VideoSkipOverlay
+            enabled={!audioMode && !watchOnYoutube && !silent}
+            paused={(shared && listen ? listen.clock : clock).paused}
+            onBack={() => seekBy(-10)}
+            onForward={() => seekBy(10)}
+          />
         </div>
       </div>
 
@@ -4352,7 +4529,7 @@ function PlayerView({
             {video.title}
           </h1>
           <div className="tf-watch-meta-row">
-            <VideoMetaLine video={video} />
+            <VideoMetaLine video={video} likes={likes} />
             {series && onOpenCourse ? (
               <button
                 type="button"
@@ -4364,16 +4541,32 @@ function PlayerView({
                 <span>related playlist</span>
               </button>
             ) : null}
-            {likes ? (
-              <span className="tf-video-meta-stat" title={`${likes} likes`}>
-                <LikeIcon />
-                <span>{compactViews(likes) || likes}</span>
-              </span>
-            ) : null}
           </div>
         </div>
 
         <div className="tf-watch-actions">
+          <button
+            type="button"
+            className="tf-watch-action tf-skip-action"
+            aria-label="Back 10 seconds"
+            title="Back 10 seconds"
+            disabled={watchOnYoutube}
+            onClick={() => seekBy(-10)}
+          >
+            <SkipBackIcon />
+            <span>−10s</span>
+          </button>
+          <button
+            type="button"
+            className="tf-watch-action tf-skip-action"
+            aria-label="Forward 10 seconds"
+            title="Forward 10 seconds"
+            disabled={watchOnYoutube}
+            onClick={() => seekBy(10)}
+          >
+            <SkipForwardIcon />
+            <span>+10s</span>
+          </button>
           <button
             type="button"
             className="tf-watch-action"

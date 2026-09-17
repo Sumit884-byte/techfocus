@@ -1,13 +1,8 @@
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect } from "react";
 
 type DocFs = Document & {
   webkitFullscreenElement?: Element | null;
   webkitExitFullscreen?: () => Promise<void> | void;
-};
-
-type ElFs = HTMLElement & {
-  webkitRequestFullscreen?: () => Promise<void> | void;
 };
 
 export function fullscreenElement(): Element | null {
@@ -28,7 +23,11 @@ export async function lockLandscape(): Promise<void> {
   try {
     await screen.orientation?.lock?.("landscape");
   } catch {
-    // iOS Safari and many desktop browsers reject orientation lock
+    try {
+      await screen.orientation?.lock?.("landscape-primary");
+    } catch {
+      // iOS Safari and many desktop browsers reject orientation lock
+    }
   }
 }
 
@@ -38,36 +37,6 @@ export function unlockOrientation(): void {
   } catch {
     // ignore
   }
-}
-
-export async function requestFullView(el: HTMLElement): Promise<boolean> {
-  const tryFs = async (node: HTMLElement) => {
-    const target = node as ElFs;
-    if (target.requestFullscreen) {
-      await target.requestFullscreen();
-      return true;
-    }
-    if (target.webkitRequestFullscreen) {
-      await target.webkitRequestFullscreen();
-      return true;
-    }
-    return false;
-  };
-
-  try {
-    if (await tryFs(el)) return true;
-  } catch {
-    // fall through to iframe
-  }
-  const iframe = el.querySelector("iframe");
-  if (iframe) {
-    try {
-      if (await tryFs(iframe)) return true;
-    } catch {
-      // ignore
-    }
-  }
-  return false;
 }
 
 export async function exitFullView(): Promise<void> {
@@ -83,48 +52,31 @@ export async function exitFullView(): Promise<void> {
   unlockOrientation();
 }
 
-export function videoFullViewTarget(stage: HTMLElement | null, videoId: string): HTMLElement | null {
+async function takeOverYoutubeFullscreen(): Promise<void> {
+  const fs = fullscreenElement();
   const host = document.querySelector(".tf-yt-host") as HTMLElement | null;
-  const hostForThis = host?.dataset.videoId === videoId;
-  const listenHidden = document.body.dataset.listenAudio === "1";
-  if (hostForThis && !listenHidden && host?.querySelector("iframe")) return host;
-  return stage;
+  const iframe = host?.querySelector("iframe") || null;
+  if (!fs || !host) {
+    if (fs) void lockLandscape();
+    return;
+  }
+  if (fs === host || host.contains(fs) && fs !== iframe) {
+    void lockLandscape();
+    return;
+  }
+  if (fs === iframe) {
+    try {
+      const target = host as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void };
+      if (target.requestFullscreen) await target.requestFullscreen();
+      else await target.webkitRequestFullscreen?.();
+    } catch {
+      // keep the YouTube iframe fullscreen
+    }
+  }
+  void lockLandscape();
 }
 
-function FullViewIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M8 3H5a2 2 0 0 0-2 2v3" />
-      <path d="M16 3h3a2 2 0 0 1 2 2v3" />
-      <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
-      <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-    </svg>
-  );
-}
-
-function VideoFullView({
-  enabled,
-  stage,
-  videoId,
-}: {
-  enabled: boolean;
-  stage: HTMLElement | null;
-  videoId: string;
-}) {
-  const [active, setActive] = useState(false);
-  const [box, setBox] = useState({ top: 0, left: 0, width: 0, height: 0 });
-
-  useEffect(() => {
-    const sync = () => setActive(Boolean(fullscreenElement()));
-    sync();
-    document.addEventListener("fullscreenchange", sync);
-    document.addEventListener("webkitfullscreenchange", sync);
-    return () => {
-      document.removeEventListener("fullscreenchange", sync);
-      document.removeEventListener("webkitfullscreenchange", sync);
-    };
-  }, []);
-
+function VideoFullView({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     if (!enabled && fullscreenElement()) {
       void exitFullView();
@@ -132,15 +84,13 @@ function VideoFullView({
   }, [enabled]);
 
   useEffect(() => {
-    return () => {
-      void exitFullView();
-    };
-  }, []);
-
-  useEffect(() => {
     const applyLock = () => {
-      if (fullscreenElement() && enabled) void lockLandscape();
-      else unlockOrientation();
+      if (!enabled) return;
+      if (!fullscreenElement()) {
+        unlockOrientation();
+        return;
+      }
+      void takeOverYoutubeFullscreen();
     };
     applyLock();
     document.addEventListener("fullscreenchange", applyLock);
@@ -152,62 +102,7 @@ function VideoFullView({
     };
   }, [enabled]);
 
-  useEffect(() => {
-    if (!stage || !enabled) return;
-    let ticking = false;
-    const place = () => {
-      ticking = false;
-      const rect = stage.getBoundingClientRect();
-      setBox({
-        top: rect.top,
-        left: rect.left,
-        width: rect.width,
-        height: rect.height,
-      });
-    };
-    const requestPlace = () => {
-      if (ticking) return;
-      ticking = true;
-      window.requestAnimationFrame(place);
-    };
-    place();
-    window.addEventListener("resize", requestPlace);
-    window.addEventListener("scroll", requestPlace, true);
-    window.visualViewport?.addEventListener("resize", requestPlace);
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(place) : null;
-    observer?.observe(stage);
-    return () => {
-      window.removeEventListener("resize", requestPlace);
-      window.removeEventListener("scroll", requestPlace, true);
-      window.visualViewport?.removeEventListener("resize", requestPlace);
-      observer?.disconnect();
-    };
-  }, [stage, enabled]);
-
-  if (!enabled || !stage || active || box.width < 80 || box.height < 80) return null;
-
-  return createPortal(
-    <button
-      type="button"
-      className="tf-fullview-btn"
-      aria-label="Full view"
-      title="Full view"
-      style={{
-        top: box.top + box.height - 40,
-        left: box.left + box.width - 42,
-      }}
-      onClick={() => {
-        const target = videoFullViewTarget(stage, videoId);
-        if (!target) return;
-        void requestFullView(target).then((ok) => {
-          if (ok) void lockLandscape();
-        });
-      }}
-    >
-      <FullViewIcon />
-    </button>,
-    document.body,
-  );
+  return null;
 }
 
 export default VideoFullView;
