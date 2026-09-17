@@ -191,9 +191,10 @@ function VideoFullView({
       type="button"
       className="tf-fullview-btn"
       aria-label="Full view"
+      title="Full view"
       style={{
         top: box.top + box.height - 40,
-        left: box.left + box.width - 76,
+        left: box.left + box.width - 42,
       }}
       onClick={() => {
         const target = videoFullViewTarget(stage, videoId);
@@ -204,7 +205,6 @@ function VideoFullView({
       }}
     >
       <FullViewIcon />
-      <span>full</span>
     </button>,
     document.body,
   );

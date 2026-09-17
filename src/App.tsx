@@ -403,6 +403,50 @@ function PlaylistIcon() {
   );
 }
 
+function ListenIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+      <path d="M21 19a2 2 0 0 1-2 2h-1v-8h1a2 2 0 0 1 2 2Z" />
+      <path d="M3 19a2 2 0 0 0 2 2h1v-8H5a2 2 0 0 0-2 2Z" />
+    </svg>
+  );
+}
+
+function VideoCamIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="2" y="7" width="13" height="10" rx="2" />
+      <path d="m15 10 6-3v10l-6-3Z" />
+    </svg>
+  );
+}
+
+function AiIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 3 13.6 9.4 20 11 13.6 12.6 12 19 10.4 12.6 4 11 10.4 9.4Z" />
+    </svg>
+  );
+}
+
+function DescriptionIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M8 6h13M8 12h13M8 18h8" />
+      <path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" />
+    </svg>
+  );
+}
+
+function CommentsIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
 function PremiereIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
@@ -2717,9 +2761,13 @@ function TalkToAi({ video }: { video: Video }) {
       <button
         type="button"
         className={`tf-watch-action${open ? " is-on" : ""}`}
+        aria-label="AI"
+        title="AI"
+        aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        ai
+        <AiIcon />
+        <span>ai</span>
       </button>
       {open ? (
         <>
@@ -3990,33 +4038,53 @@ function PlayerView({
           backdropFilter: "blur(12px)",
         }}
       >
-        <button
-          onClick={onBack}
-          style={{
-            background: "none",
-            border: "1px solid var(--tf-line)",
-            color: "var(--tf-muted)",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "6px 14px",
-            borderRadius: "3px",
-            fontFamily: "var(--font-mono)",
-            fontSize: "12px",
-            transition: "color 0.15s, border-color 0.15s",
-          }}
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLButtonElement).style.color = "var(--tf-text)";
-            (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tf-dim)";
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLButtonElement).style.color = "var(--tf-muted)";
-            (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tf-line)";
-          }}
-        >
-          <ArrowLeftIcon /> back
-        </button>
+        <div className="tf-watch-header-nav">
+          <button
+            onClick={onBack}
+            style={{
+              background: "none",
+              border: "1px solid var(--tf-line)",
+              color: "var(--tf-muted)",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 14px",
+              borderRadius: "3px",
+              fontFamily: "var(--font-mono)",
+              fontSize: "12px",
+              transition: "color 0.15s, border-color 0.15s",
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLButtonElement).style.color = "var(--tf-text)";
+              (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tf-dim)";
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLButtonElement).style.color = "var(--tf-muted)";
+              (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--tf-line)";
+            }}
+          >
+            <ArrowLeftIcon /> back
+          </button>
+          {!silent ? (
+            <button
+              type="button"
+              className={`tf-autoplay-next tf-watch-action${autoNext ? " is-on" : ""}`}
+              aria-label={autoNext ? "Autoplay next on" : "Autoplay next off"}
+              title={autoNext ? "Autoplay next on" : "Autoplay next off"}
+              aria-pressed={autoNext}
+              onClick={() =>
+                setAutoNext((value) => {
+                  const next = !value;
+                  autoNextPref.current = next;
+                  return next;
+                })
+              }
+            >
+              autoplay next {autoNext ? "on" : "off"}
+            </button>
+          ) : null}
+        </div>
         <span className="tf-crumb" style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--tf-dim)" }}>
           TECHFOCUS
           {displayCategory(video.category) ? (
@@ -4085,22 +4153,13 @@ function PlayerView({
                 </div>
                 <button
                   type="button"
+                  className="tf-watch-action"
                   aria-label="Switch to video"
+                  title="Switch to video"
                   onClick={() => chooseWatchMode(false)}
-                  style={{
-                    background: "none",
-                    border: "1px solid var(--tf-line)",
-                    color: "var(--tf-muted)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "11px",
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    padding: "6px 12px",
-                    borderRadius: "3px",
-                    cursor: "pointer",
-                  }}
                 >
-                  video
+                  <VideoCamIcon />
+                  <span>video</span>
                 </button>
               </div>
               {autoDub ? (
@@ -4311,21 +4370,6 @@ function PlayerView({
                 <span>{compactViews(likes) || likes}</span>
               </span>
             ) : null}
-            {!silent ? (
-              <button
-                type="button"
-                className={`tf-autoplay-next tf-watch-action${autoNext ? " is-on" : ""}`}
-                onClick={() =>
-                  setAutoNext((value) => {
-                    const next = !value;
-                    autoNextPref.current = next;
-                    return next;
-                  })
-                }
-              >
-                autoplay next {autoNext ? "on" : "off"}
-              </button>
-            ) : null}
           </div>
         </div>
 
@@ -4334,27 +4378,38 @@ function PlayerView({
             type="button"
             className="tf-watch-action"
             aria-label={audioMode ? "Switch to video" : "Switch to listen"}
+            title={audioMode ? "Switch to video" : "Switch to listen"}
             disabled={watchOnYoutube}
             onClick={() => chooseWatchMode(!audioMode)}
           >
-            {audioMode ? "video" : "listen"}
+            {audioMode ? <VideoCamIcon /> : <ListenIcon />}
+            <span>{audioMode ? "video" : "listen"}</span>
           </button>
           <TalkToAi video={video} />
           <button
             type="button"
             className={`tf-watch-action${descOpen ? " is-on" : ""}`}
+            aria-label="Description"
+            title="Description"
             aria-expanded={descOpen}
             onClick={() => setDescOpen((open) => !open)}
           >
-            description
+            <DescriptionIcon />
+            <span>description</span>
           </button>
           <button
             type="button"
             className={`tf-watch-action${commentsOpen ? " is-on" : ""}`}
+            aria-label={descReady && comments.length ? `Comments (${comments.length})` : "Comments"}
+            title={descReady && comments.length ? `Comments (${comments.length})` : "Comments"}
             aria-expanded={commentsOpen}
             onClick={() => setCommentsOpen((open) => !open)}
           >
-            comments{descReady && comments.length ? ` · ${comments.length}` : ""}
+            <CommentsIcon />
+            <span>comments{descReady && comments.length ? ` · ${comments.length}` : ""}</span>
+            {descReady && comments.length ? (
+              <span className="tf-watch-action-badge">{comments.length > 99 ? "99+" : comments.length}</span>
+            ) : null}
           </button>
         </div>
 
