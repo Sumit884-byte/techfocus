@@ -1177,7 +1177,9 @@ button:hover > .tf-card {
     margin-bottom: 20px;
   }
 
-  .tf-skip-overlay {
+  .tf-skip-overlay,
+  .tf-listen-skip,
+  .tf-listen-top .tf-watch-action {
     display: none;
   }
 
