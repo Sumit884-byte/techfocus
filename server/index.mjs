@@ -1046,6 +1046,52 @@ function isCoursePlaylistId(id) {
   return /^(PL|OLAK5uy_)[\w-]+$/.test(id);
 }
 
+function normalizeChannelName(name) {
+  return String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function sameChannel(a, b) {
+  const left = normalizeChannelName(a);
+  const right = normalizeChannelName(b);
+  return Boolean(left && right && left === right);
+}
+
+function extractWatchVideoChannel(payload) {
+  let channel = "";
+  const visit = (node) => {
+    if (!node || typeof node !== "object" || channel) return;
+    if (node.videoOwnerRenderer) {
+      channel = nodeText(node.videoOwnerRenderer.title) || "";
+      return;
+    }
+    if (node.videoOwnerViewModel) {
+      channel = nodeText(node.videoOwnerViewModel.title) || node.videoOwnerViewModel.subscriberName || "";
+      return;
+    }
+    for (const value of Object.values(node)) {
+      if (channel) return;
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(payload);
+  return channel;
+}
+
+async function playlistBrowseOwner(playlistId) {
+  const data = await innertube("browse", { browseId: `VL${playlistId}` });
+  if (!data) return "";
+  const sidebarOwner =
+    data.sidebar?.playlistSidebarRenderer?.items?.find((item) => item.playlistSidebarSecondaryInfoRenderer)
+      ?.playlistSidebarSecondaryInfoRenderer?.videoOwner?.videoOwnerRenderer?.title;
+  return (
+    nodeText(data.header?.playlistHeaderRenderer?.ownerText) ||
+    data.metadata?.playlistMetadataRenderer?.owner ||
+    nodeText(sidebarOwner) ||
+    ""
+  );
+}
+
 function extractWatchCourses(payload, videoId) {
   const courses = [];
   const seen = new Set();
@@ -1060,7 +1106,7 @@ function extractWatchCourses(payload, videoId) {
         seen.add(id);
         courses.push({
           id,
-          title: nodeText(panel.title) || "Course",
+          title: nodeText(panel.title) || "Playlist",
           channel: nodeText(panel.ownerName) || nodeText(panel.shortBylineText) || nodeText(panel.longBylineText) || "",
           count:
             typeof panel.totalVideos === "number"
@@ -1133,7 +1179,7 @@ function extractSuperTitleCourses(payload) {
       );
       if (id && isCoursePlaylistId(id) && !seen.has(id)) {
         seen.add(id);
-        const title = nodeText(run.text) || nodeText(superTitle) || "Course";
+        const title = nodeText(run.text) || nodeText(superTitle) || "Playlist";
         found.push({
           id,
           title,
@@ -1169,7 +1215,7 @@ function extractCourseLessonCount(payload) {
   return count;
 }
 
-async function findCoursesForVideo(videoId) {
+async function findCoursesForVideo(videoId, requestedChannel = "") {
   const next = await innertube("next", { videoId });
   if (!next) return [];
   const titled = extractSuperTitleCourses(next);
@@ -1177,25 +1223,46 @@ async function findCoursesForVideo(videoId) {
   const linked = extractLinkedPlaylists(next).filter((item) => item.linked);
   const listed = extractPlaylists(next);
   const lessonCount = extractCourseLessonCount(next);
+  const titledIds = new Set(titled.map((item) => item.id));
+  const panelIds = new Set(panel.map((item) => item.id));
+  const watchChannel = requestedChannel || extractWatchVideoChannel(next);
   const byId = new Map();
   for (const item of [...titled, ...panel, ...listed, ...linked]) {
     if (!isCoursePlaylistId(item.id)) continue;
     const prev = byId.get(item.id) || {};
+    let channel = item.channel || prev.channel || "";
+    if (!channel && titledIds.has(item.id) && watchChannel) channel = watchChannel;
     byId.set(item.id, {
       ...prev,
       ...item,
-      title: item.title && item.title !== "Playlist" ? item.title : prev.title || item.title || "Course",
-      channel: item.channel || prev.channel || "",
+      title: item.title && item.title !== "Playlist" ? item.title : prev.title || item.title || "Playlist",
+      channel,
       count: item.count || prev.count || lessonCount || "",
       thumb: item.thumb || prev.thumb || "",
       category: item.category || prev.category || inferCategory(item.title || prev.title || ""),
-      kind: item.kind || prev.kind || (titled.some((course) => course.id === item.id) ? "course" : "playlist"),
+      kind: item.kind || prev.kind || (titledIds.has(item.id) ? "course" : "playlist"),
     });
   }
-  const order = titled.length
-    ? titled.map((item) => item.id)
-    : [...new Set([...panel.map((item) => item.id), ...linked.map((item) => item.id)])];
-  return order.map((id) => byId.get(id)).filter(Boolean).slice(0, 3);
+  const order = [...new Set([...titled.map((item) => item.id), ...panel.map((item) => item.id), ...linked.map((item) => item.id)])];
+  const matches = [];
+  for (const id of order) {
+    const item = byId.get(id);
+    if (!item) continue;
+    let channel = item.channel;
+    if (!channel && !titledIds.has(id)) {
+      channel = await playlistBrowseOwner(id);
+    }
+    if (!channel && titledIds.has(id) && watchChannel) channel = watchChannel;
+    const filled = { ...item, channel: channel || item.channel || "" };
+    if (watchChannel) {
+      if (!sameChannel(filled.channel, watchChannel)) continue;
+    } else if (!titledIds.has(id) && !panelIds.has(id)) {
+      continue;
+    }
+    matches.push(filled);
+    if (matches.length >= 3) break;
+  }
+  return matches;
 }
 
 async function searchPlaylists(topic, page = 1, filters = {}) {
@@ -1484,6 +1551,35 @@ async function relatedVideos(source, excludeIds = [], page = 1, includeShorts = 
   const results = [...scored, ...neighbors].slice(0, 12);
   searchCache.set(key, { results, ts: Date.now() });
   return results;
+}
+
+async function channelNextVideo(source, excludeIds = [], includeShorts = false) {
+  const id = (source.id || "").trim();
+  const title = (source.title || "").trim();
+  const channel = (source.channel || "").trim();
+  if (!channel) return null;
+
+  const seen = new Set([id, ...excludeIds].filter(Boolean));
+  const related = await relatedVideos(source, excludeIds, 1, includeShorts);
+  for (const video of related) {
+    if (!video?.id || seen.has(video.id)) continue;
+    if (!sameChannel(video.channel, channel)) continue;
+    if (!includeShorts && isShort(video)) continue;
+    return video;
+  }
+
+  const queries = [channel, `${channel} lecture`, `${channel} tutorial`];
+  const batches = await Promise.all(queries.map((query) => searchRaw(query, 1)));
+  for (const raw of batches) {
+    for (const video of raw) {
+      if (!video?.id || seen.has(video.id) || !looksPlayable(video)) continue;
+      if (!sameChannel(video.channel, channel)) continue;
+      if (!includeShorts && isShort(video)) continue;
+      seen.add(video.id);
+      return withCategory(video, title || channel);
+    }
+  }
+  return null;
 }
 
 const QUERY_BANK = [
@@ -2493,6 +2589,38 @@ export async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === "GET" && (url.pathname === "/api/channel-next" || url.pathname === "/channel-next")) {
+    const exclude = (url.searchParams.get("exclude") || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const includeShorts = url.searchParams.get("shorts") === "1";
+    const id = (url.searchParams.get("id") || "").trim();
+    const channel = (url.searchParams.get("channel") || "").trim();
+    if (!channel) {
+      sendJson(res, 200, { video: null });
+      return;
+    }
+
+    try {
+      const video = await localeAls.run(localeFromRequest(url), () =>
+        channelNextVideo(
+          {
+            id,
+            title: (url.searchParams.get("title") || "").trim(),
+            channel,
+          },
+          exclude,
+          includeShorts,
+        ),
+      );
+      sendJson(res, 200, { video: video || null });
+    } catch {
+      sendJson(res, 500, { error: "Channel next failed.", video: null });
+    }
+    return;
+  }
+
   if (req.method === "GET" && (url.pathname === "/api/random" || url.pathname === "/random")) {
     const exclude = (url.searchParams.get("exclude") || "")
       .split(",")
@@ -2570,7 +2698,8 @@ export async function handleRequest(req, res) {
       return;
     }
     try {
-      const courses = await findCoursesForVideo(id);
+      const channel = (url.searchParams.get("channel") || "").trim();
+      const courses = await findCoursesForVideo(id, channel);
       sendJson(res, 200, { courses });
     } catch {
       sendJson(res, 200, { courses: [] });

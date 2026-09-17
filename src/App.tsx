@@ -8,6 +8,7 @@ import {
   langLabel,
   prefsFingerprint,
   readSearchPrefs,
+  regionForLang,
   searchApiQuery,
   writeSearchPrefs,
   type SearchPrefs,
@@ -2084,7 +2085,7 @@ function HistoryPage({
       </header>
 
       <main className="tf-main">
-        <div style={{ maxWidth: 400, marginBottom: 28, position: "relative" }}>
+        <div className="tf-history-search">
           <div
             style={{
               position: "absolute",
@@ -2287,15 +2288,8 @@ function SettingsPage({
           TECHFOCUS / SETTINGS
         </span>
       </header>
-      <main className="tf-main" style={{ maxWidth: 560 }}>
-        <div
-          style={{
-            background: "var(--tf-panel)",
-            border: "1px solid var(--tf-line)",
-            borderRadius: 16,
-            padding: 18,
-          }}
-        >
+      <main className="tf-main tf-settings-main">
+        <div className="tf-settings-card">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "var(--tf-text)", marginBottom: 8 }}>
@@ -2350,15 +2344,7 @@ function SettingsPage({
             {audioOnly ? "new lectures start as audio" : "new lectures start as video"}
           </div>
         </div>
-        <div
-          style={{
-            background: "var(--tf-panel)",
-            border: "1px solid var(--tf-line)",
-            borderRadius: 16,
-            padding: 18,
-            marginTop: 16,
-          }}
-        >
+        <div className="tf-settings-card">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "var(--tf-text)", marginBottom: 8 }}>
@@ -2413,15 +2399,7 @@ function SettingsPage({
             {includeShorts ? "shorts on" : "shorts off"}
           </div>
         </div>
-        <div
-          style={{
-            background: "var(--tf-panel)",
-            border: "1px solid var(--tf-line)",
-            borderRadius: 16,
-            padding: 18,
-            marginTop: 16,
-          }}
-        >
+        <div className="tf-settings-card">
           <div style={{ fontSize: 16, fontWeight: 700, color: "var(--tf-text)", marginBottom: 6 }}>
             Language
           </div>
@@ -2451,15 +2429,7 @@ function SettingsPage({
             {langLabel(prefs.lang)}
           </div>
         </div>
-        <div
-          style={{
-            background: "var(--tf-panel)",
-            border: "1px solid var(--tf-line)",
-            borderRadius: 16,
-            padding: 18,
-            marginTop: 16,
-          }}
-        >
+        <div className="tf-settings-card">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700, color: "var(--tf-text)", marginBottom: 8 }}>
@@ -2489,15 +2459,7 @@ function SettingsPage({
             {geminiReady === false ? " · gemini key missing" : geminiReady ? " · gemini ready" : ""}
           </div>
         </div>
-        <div
-          style={{
-            background: "var(--tf-panel)",
-            border: "1px solid var(--tf-line)",
-            borderRadius: 16,
-            padding: 18,
-            marginTop: 16,
-          }}
-        >
+        <div className="tf-settings-card">
           <SearchFilterChips variant="settings" prefs={prefs} onChange={onPrefs} />
         </div>
       </main>
@@ -2507,6 +2469,56 @@ function SettingsPage({
 
 function isCoursePlaylistId(id?: string) {
   return Boolean(id && /^(PL|OLAK5uy_)[\w-]+$/.test(id));
+}
+
+function sameCreator(a?: string, b?: string) {
+  const left = (a || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const right = (b || "").replace(/\s+/g, " ").trim().toLowerCase();
+  return Boolean(left && right && left === right);
+}
+
+const autoNextPref = { current: true };
+
+function shortsPrefOn() {
+  try {
+    return localStorage.getItem(SHORTS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function fetchSameChannelNext(video: Video, extraExclude: string[] = []): Promise<Video | null> {
+  const channel = (video.channel || "").trim();
+  if (!channel) return null;
+  const prefs = readSearchPrefs();
+  const includeShorts = prefs.type === "shorts" ? true : prefs.type === "video" ? false : shortsPrefOn();
+  const skip = watchedIdList([video.id, ...extraExclude]);
+  const qs = new URLSearchParams({
+    id: video.id,
+    title: video.title || "",
+    channel,
+    exclude: skip.join(","),
+    shorts: includeShorts ? "1" : "0",
+    hl: prefs.lang,
+    gl: regionForLang(prefs.lang),
+  });
+  try {
+    const res = await fetch(`/api/channel-next?${qs}`);
+    const data = await res.json();
+    const next = (data?.video || data?.result) as Video | undefined;
+    if (!next?.id || next.id === video.id) return null;
+    if (!sameCreator(next.channel, channel)) return null;
+    if (!includeShorts && isShort(next)) return null;
+    return sanitizeVideo(next, channel);
+  } catch {
+    return null;
+  }
+}
+
+function coursesApiUrl(video: Video) {
+  const params = new URLSearchParams({ id: video.id });
+  if (video.channel) params.set("channel", video.channel);
+  return `/api/courses?${params}`;
 }
 
 function CoursePanel({
@@ -2520,25 +2532,30 @@ function CoursePanel({
   queue?: Video[];
   onOpen: (playlist: Playlist) => void;
 }) {
-  const inKnown = Boolean(known) && isCoursePlaylistId(known?.id);
-  const [courses, setCourses] = useState<Playlist[]>(() => (inKnown && known ? [known] : []));
+  const knownSame = Boolean(known?.id) && isCoursePlaylistId(known?.id) && sameCreator(video.channel, known?.channel);
+  const [courses, setCourses] = useState<Playlist[]>(() => (knownSame && known ? [known] : []));
 
   useEffect(() => {
     const controller = new AbortController();
-    setCourses(inKnown && known ? [known] : []);
-    if (inKnown) return () => controller.abort();
-    fetch(`/api/courses?id=${encodeURIComponent(video.id)}`, { signal: controller.signal })
+    setCourses(knownSame && known ? [known] : []);
+    if (knownSame) return () => controller.abort();
+    fetch(coursesApiUrl(video), { signal: controller.signal })
       .then((res) => res.json())
       .then((data) => {
         const incoming = (Array.isArray(data.courses) ? data.courses : []) as Playlist[];
-        setCourses(incoming.filter((item) => isCoursePlaylistId(item.id)).slice(0, 2));
+        setCourses(
+          incoming
+            .filter((item) => isCoursePlaylistId(item.id))
+            .filter((item) => !video.channel || !item.channel || sameCreator(video.channel, item.channel))
+            .slice(0, 2),
+        );
       })
       .catch(() => setCourses([]));
     return () => controller.abort();
-  }, [video.id, known?.id, inKnown]);
+  }, [video.id, video.channel, known?.id, known?.channel, knownSame]);
 
   const lectureAt = queue.findIndex((item) => item.id === video.id);
-  const primary = courses[0] || (inKnown ? known : null) || null;
+  const primary = courses[0] || (knownSame ? known : null) || null;
 
   if (!primary) return null;
 
@@ -2553,7 +2570,7 @@ function CoursePanel({
           marginBottom: 8,
         }}
       >
-        COURSE
+        RELATED PLAYLIST
       </div>
       {primary ? (
         <button
@@ -2696,21 +2713,11 @@ function TalkToAi({ video }: { video: Video }) {
         : "uses this video transcript";
 
   return (
-    <div>
+    <div className="tf-watch-ai">
       <button
+        type="button"
+        className={`tf-watch-action${open ? " is-on" : ""}`}
         onClick={() => setOpen((current) => !current)}
-        style={{
-          background: open ? "var(--tf-accent-soft)" : "none",
-          border: `1px solid ${open ? "var(--tf-accent-line)" : "var(--tf-line)"}`,
-          color: open ? "var(--tf-accent)" : "var(--tf-muted)",
-          fontFamily: "var(--font-mono)",
-          fontSize: "11px",
-          letterSpacing: "0.06em",
-          textTransform: "uppercase",
-          padding: "6px 12px",
-          borderRadius: "3px",
-          cursor: "pointer",
-        }}
       >
         ai
       </button>
@@ -3097,7 +3104,7 @@ function PersistentAudio({
   const [status, setStatus] = useState<ListenApi["status"]>("starting");
   videoRef.current = video;
   queueRef.current = queue;
-  autoNextRef.current = autoNext;
+  autoNextRef.current = autoNextPref.current;
   onAdvanceRef.current = onAdvance;
   onPlayingRef.current = onPlaying;
 
@@ -3249,8 +3256,16 @@ function PersistentAudio({
       if (cancelled || advanced || !hasPlayed) return;
       advanced = true;
       writeProgress(startId, 0);
+      if (!autoNextRef.current) return;
       const next = nextInQueue();
-      if (autoNextRef.current && next) onAdvanceRef.current(next);
+      if (next) {
+        onAdvanceRef.current(next);
+        return;
+      }
+      void fetchSameChannelNext(videoRef.current).then((channelNext) => {
+        if (cancelled || !channelNext) return;
+        onAdvanceRef.current(channelNext);
+      });
     }
 
     loadYoutubeApi().then(() => {
@@ -3563,7 +3578,7 @@ function PlayerView({
   const [hasMore, setHasMore] = useState(true);
   const [streamStatus, setStreamStatus] = useState<"starting" | "playing" | "buffering">("starting");
   const [watchOnYoutube, setWatchOnYoutube] = useState(false);
-  const [autoNext, setAutoNext] = useState(true);
+  const [autoNext, setAutoNext] = useState(autoNextPref.current);
   const [audioMode, setAudioMode] = useState(() => initialAudioMode(video.id, preferAudio));
   const [audioRate, setAudioRate] = useState(() => readAudioRate(video.id));
   const [description, setDescription] = useState("");
@@ -3595,11 +3610,13 @@ function PlayerView({
   const autoNextRef = useRef(true);
   const queueRef = useRef(queue);
   const videoRef = useRef(video);
+  const recommendedRef = useRef<Video[]>([]);
   const onSelectRef = useRef(onSelect);
   const onPlayingRef = useRef(onPlaying);
   autoNextRef.current = autoNext;
   queueRef.current = queue;
   videoRef.current = video;
+  recommendedRef.current = recommended;
   onSelectRef.current = onSelect;
   onPlayingRef.current = onPlaying;
 
@@ -3610,10 +3627,27 @@ function PlayerView({
     return list[index + 1];
   }
 
+  function nextFromRecommended(from: Video) {
+    const skip = watchedIdSet([from.id]);
+    return (
+      recommendedRef.current.find(
+        (item) => item.id && !skip.has(item.id) && sameCreator(item.channel, from.channel),
+      ) || null
+    );
+  }
+
   function playNext() {
-    const next = nextInQueue();
-    if (!next) return;
-    window.setTimeout(() => onSelectRef.current(next, undefined, { takeover: true }), 0);
+    const from = videoRef.current;
+    const queued = nextInQueue();
+    if (queued) {
+      window.setTimeout(() => onSelectRef.current(queued, undefined, { takeover: true }), 0);
+      return;
+    }
+    void (async () => {
+      const next = nextFromRecommended(from) || (await fetchSameChannelNext(from));
+      if (!next || videoRef.current.id !== from.id) return;
+      window.setTimeout(() => onSelectRef.current(next, undefined, { takeover: true }), 0);
+    })();
   }
 
   useEffect(() => {
@@ -3626,23 +3660,29 @@ function PlayerView({
   }, [video.id, preferAudio]);
 
   useEffect(() => {
-    if (course && isCoursePlaylistId(course.id)) {
+    if (course && isCoursePlaylistId(course.id) && sameCreator(video.channel, course.channel)) {
       setSeries(course);
       return;
     }
     const controller = new AbortController();
     setSeries(null);
-    fetch(`/api/courses?id=${encodeURIComponent(video.id)}`, { signal: controller.signal })
+    fetch(coursesApiUrl(video), { signal: controller.signal })
       .then((res) => res.json())
       .then((data) => {
         const incoming = (Array.isArray(data.courses) ? data.courses : []) as Playlist[];
-        setSeries(incoming.find((item) => isCoursePlaylistId(item.id)) || null);
+        setSeries(
+          incoming.find(
+            (item) =>
+              isCoursePlaylistId(item.id) &&
+              (!video.channel || !item.channel || sameCreator(video.channel, item.channel)),
+          ) || null,
+        );
       })
       .catch(() => {
         if (!controller.signal.aborted) setSeries(null);
       });
     return () => controller.abort();
-  }, [video.id, course?.id]);
+  }, [video.id, video.channel, course?.id, course?.channel]);
 
   function chooseWatchMode(listen: boolean) {
     if (listen) void exitFullView();
@@ -3985,7 +4025,7 @@ function PlayerView({
         </span>
       </header>
 
-      <div className="tf-player-bleed">
+      <div className={`tf-player-bleed${audioMode ? " is-listen" : ""}`}>
         <div
           className="tf-player-stage"
           ref={setPlayerBox}
@@ -4028,16 +4068,7 @@ function PlayerView({
                 alt=""
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.28 }}
               />
-              <div
-                style={{
-                  position: "relative",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  marginBottom: 12,
-                }}
-              >
+              <div className="tf-listen-top">
                 <div
                   style={{
                     fontFamily: "var(--font-mono)",
@@ -4077,7 +4108,7 @@ function PlayerView({
                   auto dub · {langLabel(lang)}
                 </div>
               ) : null}
-              <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 16 }}>
+              <div className="tf-listen-controls">
                 <button
                   aria-label={(shared && listen ? listen.clock : clock).paused ? "Play audio" : "Pause audio"}
                   onClick={() => {
@@ -4106,7 +4137,7 @@ function PlayerView({
                 >
                   {(shared && listen ? listen.clock : clock).paused ? <PlayIcon /> : <PauseIcon />}
                 </button>
-                <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="tf-listen-scrub">
                   <input
                     type="range"
                     min={0}
@@ -4250,6 +4281,7 @@ function PlayerView({
             </div>
           ) : null}
           <h1
+            className="tf-watch-title"
             style={{
               fontSize: "clamp(18px, 3vw, 26px)",
               fontWeight: 700,
@@ -4260,27 +4292,17 @@ function PlayerView({
           >
             {video.title}
           </h1>
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: "12px",
-              color: "var(--tf-muted)",
-              display: "flex",
-              gap: 24,
-              flexWrap: "wrap",
-              alignItems: "center",
-            }}
-          >
+          <div className="tf-watch-meta-row">
             <VideoMetaLine video={video} />
             {series && onOpenCourse ? (
               <button
                 type="button"
                 className="tf-video-meta-stat tf-playlist-link"
-                title={series.title || "Open course"}
+                title={series.title || "Open related playlist"}
                 onClick={() => onOpenCourse(series)}
               >
                 <PlaylistIcon />
-                <span>{series.kind === "course" ? "full course" : "full playlist"}</span>
+                <span>related playlist</span>
               </button>
             ) : null}
             {likes ? (
@@ -4289,22 +4311,17 @@ function PlayerView({
                 <span>{compactViews(likes) || likes}</span>
               </span>
             ) : null}
-            {queue.length > 1 && !silent ? (
+            {!silent ? (
               <button
-                onClick={() => setAutoNext((value) => !value)}
-                style={{
-                  marginLeft: "auto",
-                  background: autoNext ? "var(--tf-accent-soft)" : "none",
-                  border: `1px solid ${autoNext ? "var(--tf-accent-line)" : "var(--tf-line)"}`,
-                  color: autoNext ? "var(--tf-accent)" : "var(--tf-muted)",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "11px",
-                  letterSpacing: "0.06em",
-                  textTransform: "uppercase",
-                  padding: "4px 10px",
-                  borderRadius: "2px",
-                  cursor: "pointer",
-                }}
+                type="button"
+                className={`tf-autoplay-next tf-watch-action${autoNext ? " is-on" : ""}`}
+                onClick={() =>
+                  setAutoNext((value) => {
+                    const next = !value;
+                    autoNextPref.current = next;
+                    return next;
+                  })
+                }
               >
                 autoplay next {autoNext ? "on" : "off"}
               </button>
@@ -4312,64 +4329,30 @@ function PlayerView({
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 28 }}>
+        <div className="tf-watch-actions">
           <button
             type="button"
+            className="tf-watch-action"
             aria-label={audioMode ? "Switch to video" : "Switch to listen"}
             disabled={watchOnYoutube}
             onClick={() => chooseWatchMode(!audioMode)}
-            style={{
-              background: "none",
-              border: "1px solid var(--tf-line)",
-              color: watchOnYoutube ? "var(--tf-dim)" : "var(--tf-muted)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "11px",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              padding: "6px 12px",
-              borderRadius: "3px",
-              cursor: watchOnYoutube ? "default" : "pointer",
-              opacity: watchOnYoutube ? 0.5 : 1,
-            }}
           >
             {audioMode ? "video" : "listen"}
           </button>
           <TalkToAi video={video} />
           <button
             type="button"
+            className={`tf-watch-action${descOpen ? " is-on" : ""}`}
             aria-expanded={descOpen}
             onClick={() => setDescOpen((open) => !open)}
-            style={{
-              background: descOpen ? "var(--tf-accent-soft)" : "none",
-              border: `1px solid ${descOpen ? "var(--tf-accent-line)" : "var(--tf-line)"}`,
-              color: descOpen ? "var(--tf-accent)" : "var(--tf-muted)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "11px",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              padding: "6px 12px",
-              borderRadius: "3px",
-              cursor: "pointer",
-            }}
           >
             description
           </button>
           <button
             type="button"
+            className={`tf-watch-action${commentsOpen ? " is-on" : ""}`}
             aria-expanded={commentsOpen}
             onClick={() => setCommentsOpen((open) => !open)}
-            style={{
-              background: commentsOpen ? "var(--tf-accent-soft)" : "none",
-              border: `1px solid ${commentsOpen ? "var(--tf-accent-line)" : "var(--tf-line)"}`,
-              color: commentsOpen ? "var(--tf-accent)" : "var(--tf-muted)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "11px",
-              letterSpacing: "0.06em",
-              textTransform: "uppercase",
-              padding: "6px 12px",
-              borderRadius: "3px",
-              cursor: "pointer",
-            }}
           >
             comments{descReady && comments.length ? ` · ${comments.length}` : ""}
           </button>
@@ -5210,7 +5193,8 @@ export default function App() {
       autoDub={searchPrefs.autoDub}
       onAdvance={(next) => {
         setListening(next);
-        if (!docked) openVideo(next, watchQueue, { takeover: true });
+        const keepQueue = watchQueue.some((item) => item.id === next.id) ? watchQueue : undefined;
+        if (!docked) openVideo(next, keepQueue, { takeover: true });
       }}
       onPlaying={() => setOpeningId(null)}
       onClose={() => {

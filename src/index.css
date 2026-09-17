@@ -272,6 +272,10 @@ body {
   color: var(--tf-accent);
   max-width: 160px;
   text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tf-filter-panel {
@@ -405,6 +409,116 @@ body {
 .tf-player-main {
   max-width: 1000px;
   padding-top: 16px;
+}
+
+.tf-watch-title {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.tf-watch-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  min-width: 0;
+}
+
+.tf-watch-meta-row > .tf-video-meta {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.tf-autoplay-next {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.tf-watch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+
+.tf-watch-action {
+  background: none;
+  border: 1px solid var(--tf-line);
+  color: var(--tf-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+.tf-watch-action.is-on {
+  background: var(--tf-accent-soft);
+  border-color: var(--tf-accent-line);
+  color: var(--tf-accent);
+}
+
+.tf-watch-action:disabled {
+  color: var(--tf-dim);
+  cursor: default;
+  opacity: 0.5;
+}
+
+.tf-watch-ai {
+  min-width: 0;
+}
+
+.tf-listen-top,
+.tf-listen-controls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.tf-listen-top {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tf-listen-top button {
+  min-height: 36px;
+  flex-shrink: 0;
+}
+
+.tf-listen-controls {
+  gap: 16px;
+}
+
+.tf-listen-scrub {
+  flex: 1;
+  min-width: 0;
+}
+
+.tf-settings-main {
+  max-width: 560px;
+}
+
+.tf-settings-card {
+  background: var(--tf-panel);
+  border: 1px solid var(--tf-line);
+  border-radius: 16px;
+  padding: 18px;
+}
+
+.tf-settings-card + .tf-settings-card {
+  margin-top: 16px;
+}
+
+.tf-history-search {
+  max-width: 400px;
+  margin-bottom: 28px;
+  position: relative;
 }
 
 .tf-watch-desc-empty {
@@ -760,6 +874,15 @@ button:hover > .tf-card {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
   }
+
+  .tf-history-open {
+    grid-template-columns: 140px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .tf-history-title {
+    font-size: 16px;
+  }
 }
 
 @media (max-width: 720px) {
@@ -774,6 +897,18 @@ button:hover > .tf-card {
     padding: 10px var(--tf-pad) 8px;
     gap: 10px;
     flex-wrap: wrap;
+  }
+
+  .tf-home-actions {
+    gap: 6px;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .tf-home-actions button {
+    padding: 8px 10px !important;
+    min-height: 36px;
   }
 
   .tf-brand-word {
@@ -809,7 +944,7 @@ button:hover > .tf-card {
   }
 
   .tf-main {
-    padding: 14px var(--tf-pad) 108px;
+    padding: 14px var(--tf-pad) calc(var(--tf-dock-h) + 28px);
   }
 
   .tf-grid {
@@ -841,6 +976,12 @@ button:hover > .tf-card {
     border: none;
   }
 
+  .tf-player-bleed.is-listen {
+    aspect-ratio: auto;
+    height: min(46vh, 300px);
+    min-height: 252px;
+  }
+
   .tf-player-main {
     padding-top: 14px;
   }
@@ -869,12 +1010,92 @@ button:hover > .tf-card {
   }
 
   .tf-card-copy {
-    min-height: 104px !important;
+    min-height: 0 !important;
     padding: 12px 14px 14px !important;
   }
 
   .tf-listen-pad {
-    padding: 16px !important;
+    padding: 12px 14px 14px !important;
+  }
+
+  .tf-listen-controls {
+    gap: 12px;
+  }
+
+  .tf-video-meta {
+    white-space: normal;
+    flex-wrap: wrap;
+    width: 100%;
+    row-gap: 8px;
+  }
+
+  .tf-video-meta-channel {
+    max-width: 100%;
+    flex: 1 1 12rem;
+  }
+
+  .tf-watch-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+
+  .tf-watch-action,
+  .tf-watch-ai > button:first-of-type {
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .tf-autoplay-next {
+    margin-left: 0;
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .tf-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .tf-filter-row-meta {
+    width: 100%;
+    justify-content: space-between;
+    padding-top: 0;
+    min-width: 0;
+  }
+
+  .tf-filter-row-status {
+    max-width: none;
+    flex: 1;
+    text-align: left;
+  }
+
+  .tf-filter-btn,
+  .tf-chip-row button {
+    min-height: 36px;
+  }
+
+  .tf-history-list {
+    gap: 14px;
+  }
+
+  .tf-history-item {
+    padding: 12px;
+  }
+
+  .tf-history-title {
+    font-size: 15px;
+  }
+
+  .tf-history-search {
+    max-width: none;
+    margin-bottom: 18px;
+  }
+
+  .tf-settings-card {
+    padding: 14px;
   }
 
   .tf-dock-stop-extra {
