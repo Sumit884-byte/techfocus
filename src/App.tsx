@@ -3866,6 +3866,17 @@ function PlayerView({
     writeWatchMode(video.id, listen ? "listen" : "video");
   }
 
+  function toggleListenPlay() {
+    const paused = (shared && listen ? listen.clock : clock).paused;
+    if (shared && listen) {
+      if (paused) listen.play();
+      else listen.pause();
+      return;
+    }
+    if (paused) restoreSound(playerRef.current, true);
+    else playerRef.current?.pauseVideo?.();
+  }
+
   function seekBy(offset: number) {
     if (watchOnYoutube) return;
     const live = shared && listen ? listen.clock : clock;
@@ -4301,6 +4312,15 @@ function PlayerView({
                 alt=""
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.28 }}
               />
+              <button
+                type="button"
+                className="tf-listen-play"
+                aria-label={(shared && listen ? listen.clock : clock).paused ? "Play audio" : "Pause audio"}
+                title={(shared && listen ? listen.clock : clock).paused ? "Play" : "Pause"}
+                onClick={toggleListenPlay}
+              >
+                {(shared && listen ? listen.clock : clock).paused ? <PlayIcon /> : <PauseIcon />}
+              </button>
               <div className="tf-listen-top">
                 <div
                   style={{
@@ -4339,16 +4359,7 @@ function PlayerView({
                   </button>
                   <button
                     aria-label={(shared && listen ? listen.clock : clock).paused ? "Play audio" : "Pause audio"}
-                    onClick={() => {
-                      const paused = (shared && listen ? listen.clock : clock).paused;
-                      if (shared && listen) {
-                        if (paused) listen.play();
-                        else listen.pause();
-                        return;
-                      }
-                      if (paused) restoreSound(playerRef.current, true);
-                      else playerRef.current?.pauseVideo?.();
-                    }}
+                    onClick={toggleListenPlay}
                     style={{
                       width: 48,
                       height: 48,

@@ -518,6 +518,31 @@ body {
   flex: 0 0 auto;
 }
 
+.tf-listen-play {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  z-index: 2;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(12, 12, 14, 0.28);
+  color: #f4f4f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.tf-listen-play svg {
+  width: 28px;
+  height: 28px;
+}
+
 .tf-listen-top,
 .tf-listen-controls {
   position: relative;
