@@ -6,7 +6,7 @@
   "functions": {
     "api/[...path].mjs": {
       "maxDuration": 30,
-      "includeFiles": "server/**"
+      "includeFiles": "{server/**,bin/**}"
     }
   }
 }

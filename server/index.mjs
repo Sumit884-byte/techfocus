@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ytDlpCaptionUrls } from "./ytdlp.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 function loadEnv() {
@@ -1683,6 +1684,18 @@ function parseCaptionPayload(raw) {
     }
   }
 
+  if (!segments.length && /WEBVTT/i.test(trimmed)) {
+    const blocks = trimmed.replace(/WEBVTT[^\n]*/i, "").split(/\n\n+/);
+    for (const block of blocks) {
+      const match = block.match(/(?:(\d+):)?(\d+):(\d+)\.(\d+)\s+-->[\s\S]*?\n([\s\S]+)/);
+      if (!match) continue;
+      const hours = Number(match[1] || 0);
+      const start = hours * 3600 + Number(match[2]) * 60 + Number(match[3]);
+      const text = decodeCaptionText(match[5].replace(/\n+/g, " "));
+      if (text) segments.push({ start, text });
+    }
+  }
+
   if (!segments.length) {
     const matches = trimmed.matchAll(/<text[^>]*start="([^"]+)"[^>]*>([\s\S]*?)<\/text>/g);
     for (const match of matches) {
@@ -2114,6 +2127,20 @@ async function innertubeTranscript(videoId) {
 async function videoTranscript(videoId) {
   const cached = transcriptCache.get(videoId);
   if (cached && Date.now() - cached.ts < TRANSCRIPT_TTL_MS) return cached;
+
+  try {
+    const urls = await ytDlpCaptionUrls(videoId, currentLocale().hl || "en");
+    for (const href of urls.slice(0, 6)) {
+      const parsed = await fetchCaptionTrack(href);
+      if (parsed?.text) {
+        const payload = { ...parsed, source: "transcript", ts: Date.now() };
+        transcriptCache.set(videoId, payload);
+        return payload;
+      }
+    }
+  } catch {
+    // fall back to player captions
+  }
 
   const watch = await watchPlayerResponse(videoId);
   const fromWatch = captionTracksFromPlayer(watch);

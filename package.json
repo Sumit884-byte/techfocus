@@ -7,6 +7,7 @@
     "dev": "vite",
     "server": "node server/index.mjs",
     "build": "vite build",
+    "postinstall": "node server/ytdlp.mjs --ensure",
     "preview": "vite preview",
     "format": "oxfmt"
   },

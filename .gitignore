@@ -1,5 +1,7 @@
 server/data/
 node_modules/
+bin/yt-dlp
+bin/yt-dlp.exe
 dist/
 .vercel/
 build/
