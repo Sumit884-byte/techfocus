@@ -2138,8 +2138,8 @@ async function videoTranscript(videoId) {
         return payload;
       }
     }
-  } catch {
-    // fall back to player captions
+  } catch (error) {
+    console.error("yt-dlp transcript failed", error?.message || error);
   }
 
   const watch = await watchPlayerResponse(videoId);

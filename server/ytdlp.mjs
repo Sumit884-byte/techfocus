@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmodSync, createWriteStream, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, createWriteStream, existsSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BIN_DIR = join(ROOT, "bin");
 const BIN_PATH = join(BIN_DIR, "yt-dlp");
+const MIN_BIN_BYTES = 5_000_000;
 
 function releaseName() {
   if (process.platform === "darwin") return "yt-dlp_macos";
@@ -26,20 +27,36 @@ function candidateBins() {
   ].filter(Boolean);
 }
 
-export async function ensureYtDlp() {
-  for (const path of candidateBins()) {
-    if (path === "yt-dlp") continue;
-    if (existsSync(path)) return path;
+function usableFile(path) {
+  if (!path || path === "yt-dlp" || !existsSync(path)) return false;
+  try {
+    const size = statSync(path).size;
+    if (size < MIN_BIN_BYTES) return false;
+    chmodSync(path, 0o755);
+    return true;
+  } catch {
+    return false;
   }
+}
 
-  const dest = process.env.VERCEL ? join(tmpdir(), "techfocus-yt-dlp") : BIN_PATH;
+async function downloadYtDlp(dest) {
   mkdirSync(dirname(dest), { recursive: true });
   const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${releaseName()}`;
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok || !res.body) throw new Error(`yt-dlp download failed (${res.status})`);
   await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
   chmodSync(dest, 0o755);
+  if (!usableFile(dest)) throw new Error("yt-dlp download was too small");
   return dest;
+}
+
+export async function ensureYtDlp() {
+  for (const path of candidateBins()) {
+    if (usableFile(path)) return path;
+  }
+
+  const dest = process.argv.includes("--ensure") ? BIN_PATH : join(tmpdir(), "techfocus-yt-dlp");
+  return downloadYtDlp(dest);
 }
 
 function runJson(bin, videoId, timeoutMs = 18000) {

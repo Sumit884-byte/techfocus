@@ -6,7 +6,7 @@
   "functions": {
     "api/[...path].mjs": {
       "maxDuration": 30,
-      "includeFiles": "{server/**,bin/**}"
+      "includeFiles": "{server/**,bin/yt-dlp}"
     }
   }
 }
