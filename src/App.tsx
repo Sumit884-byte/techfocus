@@ -2806,7 +2806,13 @@ function CoursePanel({
   );
 }
 
-function TalkToAi({ video }: { video: Video }) {
+function TalkToAi({
+  video,
+  onOpenChange,
+}: {
+  video: Video;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<"idle" | "checking" | "ready" | "limited">("idle");
   const [source, setSource] = useState<"transcript" | "description" | "title" | "">("");
@@ -2822,7 +2828,12 @@ function TalkToAi({ video }: { video: Video }) {
     setInput("");
     setBusy(false);
     setMessages([]);
-  }, [video.id]);
+    onOpenChange?.(false);
+  }, [video.id, onOpenChange]);
+
+  useEffect(() => {
+    onOpenChange?.(open);
+  }, [open, onOpenChange]);
 
   useEffect(() => {
     if (!open) return;
@@ -2905,37 +2916,7 @@ function TalkToAi({ video }: { video: Video }) {
         <AiIcon />
         <span>ai</span>
       </button>
-      {open ? (
-        <>
-          <button
-            aria-label="Close AI"
-            onClick={() => setOpen(false)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 90,
-              background: "rgba(12,12,14,0.45)",
-              border: "none",
-              padding: 0,
-              cursor: "pointer",
-            }}
-          />
-          <aside
-            className="tf-ai-panel"
-            style={{
-              position: "fixed",
-              top: 0,
-              right: 0,
-              bottom: 0,
-              width: "min(420px, 100%)",
-              zIndex: 91,
-              background: "var(--tf-panel)",
-              borderLeft: "1px solid var(--tf-line)",
-              display: "flex",
-              flexDirection: "column",
-              boxShadow: "-16px 0 40px rgba(0,0,0,0.35)",
-            }}
-          >
+      <aside className={`tf-ai-panel${open ? " is-open" : ""}`} aria-hidden={!open}>
             <div
               style={{
                 padding: "16px 16px 14px",
@@ -3071,9 +3052,7 @@ function TalkToAi({ video }: { video: Video }) {
                 </button>
               </form>
             ) : null}
-          </aside>
-        </>
-      ) : null}
+      </aside>
     </div>
   );
 }
@@ -3771,6 +3750,7 @@ function PlayerView({
   const [watchOnYoutube, setWatchOnYoutube] = useState(false);
   const [autoNext, setAutoNext] = useState(autoNextPref.current);
   const [audioMode, setAudioMode] = useState(() => initialAudioMode(video.id, preferAudio));
+  const [aiOpen, setAiOpen] = useState(false);
   const [audioRate, setAudioRate] = useState(() => readAudioRate(video.id));
   const [description, setDescription] = useState("");
   const [descOpen, setDescOpen] = useState(true);
@@ -3934,6 +3914,17 @@ function PlayerView({
       window.dispatchEvent(new Event("tf-place-player"));
     };
   }, [audioMode, shared]);
+
+  useLayoutEffect(() => {
+    let frame = 0;
+    const started = performance.now();
+    const tick = () => {
+      window.dispatchEvent(new Event("tf-place-player"));
+      if (performance.now() - started < 380) frame = window.requestAnimationFrame(tick);
+    };
+    tick();
+    return () => window.cancelAnimationFrame(frame);
+  }, [aiOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -4209,7 +4200,7 @@ function PlayerView({
 
   return (
     <div
-      className={`tf-watch${audioMode ? " tf-watch-audio" : ""}`}
+      className={`tf-watch${audioMode ? " tf-watch-audio" : ""}${aiOpen ? " tf-watch-ai-open" : ""}`}
       style={{
         position: "fixed",
         inset: 0,
@@ -4577,7 +4568,7 @@ function PlayerView({
                 {audioMode ? <VideoCamIcon /> : <ListenIcon />}
                 <span>{audioMode ? "Video" : "Listen"}</span>
               </button>
-              <TalkToAi video={video} />
+              <TalkToAi video={video} onOpenChange={setAiOpen} />
               <button
                 type="button"
                 className={`tf-watch-action${descOpen ? " is-on" : ""}`}
