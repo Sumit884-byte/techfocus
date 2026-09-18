@@ -388,6 +388,13 @@ body {
 
 .tf-watch {
   isolation: isolate;
+  --tf-watch-rest: 220px;
+}
+
+.tf-watch .tf-player-bleed:not(.is-listen) {
+  width: min(100%, calc((100dvh - var(--tf-watch-rest)) * 16 / 9));
+  max-height: calc(100dvh - var(--tf-watch-rest));
+  margin-inline: auto;
 }
 
 .tf-watch-header {
@@ -423,7 +430,12 @@ body {
 }
 
 .tf-watch-below {
-  margin-bottom: 8px;
+  position: sticky;
+  top: 60px;
+  z-index: 80;
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  background: rgba(11, 13, 18, 0.96);
 }
 
 .tf-watch-title {
@@ -1232,6 +1244,14 @@ button:hover > .tf-card {
 
   .tf-watch-header-nav {
     gap: 8px;
+  }
+
+  .tf-watch {
+    --tf-watch-rest: 252px;
+  }
+
+  .tf-watch-below {
+    top: 48px;
   }
 
   .tf-player-bleed {
