@@ -529,14 +529,6 @@ function VideoCamIcon() {
   );
 }
 
-function AiIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12 3 13.6 9.4 20 11 13.6 12.6 12 19 10.4 12.6 4 11 10.4 9.4Z" />
-    </svg>
-  );
-}
-
 function DescriptionIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -2806,257 +2798,6 @@ function CoursePanel({
   );
 }
 
-function TalkToAi({
-  video,
-  onOpenChange,
-}: {
-  video: Video;
-  onOpenChange?: (open: boolean) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<"idle" | "checking" | "ready" | "limited">("idle");
-  const [source, setSource] = useState<"transcript" | "description" | "title" | "">("");
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [messages, setMessages] = useState<{ role: "user" | "assistant"; text: string }[]>([]);
-  const listRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setOpen(false);
-    setStatus("idle");
-    setSource("");
-    setInput("");
-    setBusy(false);
-    setMessages([]);
-    onOpenChange?.(false);
-  }, [video.id, onOpenChange]);
-
-  useEffect(() => {
-    onOpenChange?.(open);
-  }, [open, onOpenChange]);
-
-  useEffect(() => {
-    if (!open) return;
-    const controller = new AbortController();
-    setStatus("checking");
-    fetch(`/api/transcript?id=${encodeURIComponent(video.id)}`, { signal: controller.signal })
-      .then((res) => res.json())
-      .then((data) => {
-        if (!controller.signal.aborted) {
-          setSource(data.source === "description" ? "description" : data.available ? "transcript" : "title");
-          setStatus(data.available ? "ready" : "limited");
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setSource("title");
-          setStatus("limited");
-        }
-      });
-    return () => controller.abort();
-  }, [open, video.id]);
-
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, busy]);
-
-  async function ask(question: string) {
-    const text = question.trim();
-    if (!text || busy || status === "checking" || status === "idle") return;
-    setInput("");
-    setBusy(true);
-    const history = [...messages, { role: "user" as const, text }];
-    setMessages(history);
-    try {
-      const res = await fetch("/api/talk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: video.id, title: video.title, question: text, history: messages }),
-      });
-      const data = await res.json();
-      setMessages([
-        ...history,
-        { role: "assistant", text: data.answer || data.error || "I could not answer that from the transcript." },
-      ]);
-    } catch {
-      setMessages([...history, { role: "assistant", text: "Talk to AI could not reach the server." }]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const prompts = ["summarize this lecture", "what are the key points?", "explain the hard parts simply"];
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
-
-  const sourceLabel =
-    status === "limited"
-      ? "no captions · answering from the title"
-      : source === "description"
-        ? "uses the video description"
-        : "uses this video transcript";
-
-  return (
-    <div className="tf-watch-ai">
-      <button
-        type="button"
-        className={`tf-watch-action${open ? " is-on" : ""}`}
-        aria-label="AI"
-        title="AI"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <AiIcon />
-        <span>ai</span>
-      </button>
-      <aside className={`tf-ai-panel${open ? " is-open" : ""}`} aria-hidden={!open}>
-            <div
-              style={{
-                padding: "16px 16px 14px",
-                borderBottom: "1px solid var(--tf-line)",
-                display: "flex",
-                alignItems: "flex-start",
-                justifyContent: "space-between",
-                gap: 12,
-              }}
-            >
-              <div>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--tf-accent)", letterSpacing: "0.08em" }}>
-                  AI
-                </div>
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--tf-muted)", marginTop: 6, lineHeight: 1.45 }}>
-                  {sourceLabel}
-                </div>
-              </div>
-              <button
-                onClick={() => setOpen(false)}
-                style={{
-                  background: "none",
-                  border: "1px solid var(--tf-line)",
-                  color: "var(--tf-muted)",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "11px",
-                  padding: "4px 10px",
-                  borderRadius: "3px",
-                  cursor: "pointer",
-                }}
-              >
-                close
-              </button>
-            </div>
-            <div ref={listRef} style={{ flex: 1, overflow: "auto", padding: 16 }}>
-              {status === "checking" ? (
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--tf-dim)" }}>loading transcript...</div>
-              ) : messages.length === 0 ? (
-                <div>
-                  <div style={{ fontSize: "13px", color: "var(--tf-muted)", marginBottom: 12, lineHeight: 1.55 }}>
-                    {status === "limited"
-                      ? "captions are blocked, so answers use the title and topic — not the spoken lecture"
-                      : "ask about what was said in this lecture"}
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    {prompts.map((prompt) => (
-                      <button
-                        key={prompt}
-                        onClick={() => ask(prompt)}
-                        style={{
-                          background: "none",
-                          border: "1px solid var(--tf-line)",
-                          color: "var(--tf-text)",
-                          fontFamily: "var(--font-mono)",
-                          fontSize: "11px",
-                          padding: "6px 10px",
-                          borderRadius: "3px",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {prompt}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {messages.map((message, index) => (
-                    <div
-                      key={`${message.role}-${index}`}
-                      style={{
-                        fontSize: "13px",
-                        lineHeight: 1.55,
-                        color: message.role === "user" ? "var(--tf-accent)" : "var(--tf-text)",
-                        whiteSpace: "pre-wrap",
-                      }}
-                    >
-                      <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--tf-dim)", letterSpacing: "0.08em" }}>
-                        {message.role === "user" ? "YOU" : "AI"}
-                      </span>
-                      <div style={{ marginTop: 4 }}>{message.text}</div>
-                    </div>
-                  ))}
-                  {busy ? (
-                    <div style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--tf-dim)" }}>reading transcript...</div>
-                  ) : null}
-                </div>
-              )}
-            </div>
-            {status === "ready" || status === "limited" ? (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  ask(input);
-                }}
-                style={{ display: "flex", gap: 8, padding: 12, borderTop: "1px solid var(--tf-line)" }}
-              >
-                <input
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                  placeholder="ask from the transcript..."
-                  disabled={busy}
-                  style={{
-                    flex: 1,
-                    background: "var(--tf-bg)",
-                    border: "1px solid var(--tf-line)",
-                    color: "var(--tf-text)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "12px",
-                    padding: "8px 10px",
-                    borderRadius: "3px",
-                    outline: "none",
-                  }}
-                />
-                <button
-                  type="submit"
-                  disabled={busy || !input.trim()}
-                  style={{
-                    background: "var(--tf-accent)",
-                    border: "none",
-                    color: "#111827",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "11px",
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    padding: "8px 12px",
-                    borderRadius: "3px",
-                    cursor: busy || !input.trim() ? "default" : "pointer",
-                    opacity: busy || !input.trim() ? 0.5 : 1,
-                  }}
-                >
-                  ask
-                </button>
-              </form>
-            ) : null}
-      </aside>
-    </div>
-  );
-}
-
 type YtHandle = {
   destroy: () => void;
   getCurrentTime?: () => number;
@@ -3750,7 +3491,6 @@ function PlayerView({
   const [watchOnYoutube, setWatchOnYoutube] = useState(false);
   const [autoNext, setAutoNext] = useState(autoNextPref.current);
   const [audioMode, setAudioMode] = useState(() => initialAudioMode(video.id, preferAudio));
-  const [aiOpen, setAiOpen] = useState(false);
   const [audioRate, setAudioRate] = useState(() => readAudioRate(video.id));
   const [description, setDescription] = useState("");
   const [descOpen, setDescOpen] = useState(true);
@@ -3914,17 +3654,6 @@ function PlayerView({
       window.dispatchEvent(new Event("tf-place-player"));
     };
   }, [audioMode, shared]);
-
-  useLayoutEffect(() => {
-    let frame = 0;
-    const started = performance.now();
-    const tick = () => {
-      window.dispatchEvent(new Event("tf-place-player"));
-      if (performance.now() - started < 380) frame = window.requestAnimationFrame(tick);
-    };
-    tick();
-    return () => window.cancelAnimationFrame(frame);
-  }, [aiOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -4200,7 +3929,7 @@ function PlayerView({
 
   return (
     <div
-      className={`tf-watch${audioMode ? " tf-watch-audio" : ""}${aiOpen ? " tf-watch-ai-open" : ""}`}
+      className={`tf-watch${audioMode ? " tf-watch-audio" : ""}`}
       style={{
         position: "fixed",
         inset: 0,
@@ -4568,7 +4297,6 @@ function PlayerView({
                 {audioMode ? <VideoCamIcon /> : <ListenIcon />}
                 <span>{audioMode ? "Video" : "Listen"}</span>
               </button>
-              <TalkToAi video={video} onOpenChange={setAiOpen} />
               <button
                 type="button"
                 className={`tf-watch-action${descOpen ? " is-on" : ""}`}
