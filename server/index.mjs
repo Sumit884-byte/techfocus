@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ytDlpCaptionUrls } from "./ytdlp.mjs";
+import { libraryTranscript } from "./captions.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 function loadEnv() {
@@ -2210,6 +2211,7 @@ async function videoTranscript(videoId) {
 
   const want = currentLocale().hl || "en";
   const loaders = [
+    () => libraryTranscript(videoId, want),
     () => ytDlpTranscript(videoId, want),
     () => invidiousTranscript(videoId, want),
     () => pipedTranscript(videoId, want),
@@ -2349,11 +2351,26 @@ async function askLanguageModel(title, question, context, history = []) {
     })),
     { role: "user", content: `Source:\n${context}\n\nQuestion: ${question}` },
   ];
+  const ollamaHost = (process.env.OLLAMA_HOST || "http://127.0.0.1:11434").replace(/\/$/, "");
+  const ollamaModels = String(process.env.OLLAMA_MODEL || "qwen3:8b,llama3.2:1b,gpt-oss:20b")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
   const groq = process.env.GROQ_API_KEY || "";
   const openai = process.env.OPENAI_API_KEY || "";
   const gemini = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || "";
   const openrouter = process.env.OPENROUTER_API_KEY || "";
   const attempts = [];
+  for (const model of ollamaModels) {
+    attempts.push(async () => {
+      const text = await chatCompletions(
+        `${ollamaHost}/v1/chat/completions`,
+        {},
+        { model, messages, temperature: 0.2, max_tokens: 800 },
+      );
+      return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    });
+  }
   if (groq) {
     for (const model of ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]) {
       attempts.push(() =>
@@ -2897,6 +2914,7 @@ export async function handleRequest(req, res) {
       gemini: Boolean(geminiKey()),
       groq: Boolean(process.env.GROQ_API_KEY),
       openai: Boolean(process.env.OPENAI_API_KEY),
+      ollama: true,
       tts: Boolean(geminiKey()),
     });
     return;
