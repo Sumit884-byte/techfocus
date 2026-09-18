@@ -205,6 +205,12 @@ const INVIDIOUS_INSTANCES = [
   "https://yewtu.be",
 ];
 
+const PIPED_INSTANCES = [
+  "https://pipedapi.kavin.rocks",
+  "https://pipedapi.adminforge.de",
+  "https://api.piped.private.coffee",
+];
+
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -2124,28 +2130,108 @@ async function innertubeTranscript(videoId) {
   return null;
 }
 
+function pickCaptionList(tracks, want) {
+  const list = Array.isArray(tracks) ? tracks : [];
+  const match = (item, pred) => list.find(pred);
+  return (
+    match(list, (item) => new RegExp(`^${want}`, "i").test(item.languageCode || item.lang || "") && !item.kind) ||
+    match(list, (item) => new RegExp(`^${want}`, "i").test(item.languageCode || item.lang || item.label || "")) ||
+    match(list, (item) => /^en/i.test(item.languageCode || item.lang || item.label || "") && !item.kind) ||
+    match(list, (item) => /^en/i.test(item.languageCode || item.lang || item.label || "")) ||
+    list[0] ||
+    null
+  );
+}
+
+async function fetchWithTimeout(href, ms = 6000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(href, {
+      headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function invidiousTranscript(videoId, want) {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const listRes = await fetchWithTimeout(`${instance}/api/v1/captions/${encodeURIComponent(videoId)}`);
+      if (!listRes.ok) continue;
+      const data = await listRes.json();
+      const tracks = Array.isArray(data) ? data : data.captions || [];
+      const pick = pickCaptionList(tracks, want);
+      const path = pick?.url || (pick?.label ? `/api/v1/captions/${encodeURIComponent(videoId)}?label=${encodeURIComponent(pick.label)}` : "");
+      if (!path) continue;
+      const href = path.startsWith("http") ? path : `${instance}${path}`;
+      const parsed = await fetchCaptionTrack(href);
+      if (parsed?.text) return { ...parsed, source: "transcript" };
+    } catch {
+      // next instance
+    }
+  }
+  return null;
+}
+
+async function pipedTranscript(videoId, want) {
+  for (const instance of PIPED_INSTANCES) {
+    try {
+      const res = await fetchWithTimeout(`${instance}/streams/${encodeURIComponent(videoId)}`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const tracks = data.captions || data.subtitles || [];
+      const pick = pickCaptionList(tracks, want);
+      const href = pick?.url || pick?.link;
+      if (!href) continue;
+      const parsed = await fetchCaptionTrack(href);
+      if (parsed?.text) return { ...parsed, source: "transcript" };
+    } catch {
+      // next instance
+    }
+  }
+  return null;
+}
+
+async function ytDlpTranscript(videoId, want) {
+  const urls = await ytDlpCaptionUrls(videoId, want);
+  for (const href of urls.slice(0, 6)) {
+    const parsed = await fetchCaptionTrack(href);
+    if (parsed?.text) return { ...parsed, source: "transcript" };
+  }
+  return null;
+}
+
 async function videoTranscript(videoId) {
   const cached = transcriptCache.get(videoId);
   if (cached && Date.now() - cached.ts < TRANSCRIPT_TTL_MS) return cached;
 
-  try {
-    const urls = await ytDlpCaptionUrls(videoId, currentLocale().hl || "en");
-    for (const href of urls.slice(0, 6)) {
-      const parsed = await fetchCaptionTrack(href);
+  const want = currentLocale().hl || "en";
+  const hasCookies = Boolean((process.env.YT_DLP_COOKIES || process.env.YT_COOKIES || "").trim());
+  const tryYtDlpFirst = !process.env.VERCEL || hasCookies;
+  const loaders = tryYtDlpFirst
+    ? [() => ytDlpTranscript(videoId, want), () => invidiousTranscript(videoId, want), () => pipedTranscript(videoId, want)]
+    : [() => invidiousTranscript(videoId, want), () => pipedTranscript(videoId, want), () => ytDlpTranscript(videoId, want)];
+
+  for (const load of loaders) {
+    try {
+      const parsed = await load();
       if (parsed?.text) {
-        const payload = { ...parsed, source: "transcript", ts: Date.now() };
+        const payload = { ...parsed, ts: Date.now() };
         transcriptCache.set(videoId, payload);
         return payload;
       }
+    } catch (error) {
+      console.error("transcript source failed", error?.message || error);
     }
-  } catch (error) {
-    console.error("yt-dlp transcript failed", error?.message || error);
   }
 
   const watch = await watchPlayerResponse(videoId);
   const fromWatch = captionTracksFromPlayer(watch);
-  const tracks = fromWatch.length ? fromWatch : captionTracksFromPlayer(await innertube("player", { videoId }));
-  const want = currentLocale().hl || "en";
+  let tracks = fromWatch.length ? fromWatch : captionTracksFromPlayer(await innertube("player", { videoId }));
+  if (!tracks.length) tracks = captionTracksFromPlayer(await innertube("player", { videoId }, "ANDROID"));
   const preferred =
     tracks.find((track) => new RegExp(`^${want}`, "i").test(track.languageCode || "") && !track.kind) ||
     tracks.find((track) => new RegExp(`^${want}`, "i").test(track.languageCode || "")) ||
@@ -2924,7 +3010,10 @@ export async function handleRequest(req, res) {
         });
         return;
       }
-      const context = relevantTranscript(question, transcript);
+      const context =
+        transcript.source === "description"
+          ? `There is no spoken transcript. This is only the YouTube description, not what was said:\n${transcript.text.slice(0, 2500)}\nAnswer from the title and this description. Do not paste chapter timestamps.`
+          : relevantTranscript(question, transcript);
       const modeled = await askLanguageModel(title, question, context, history);
       sendJson(res, 200, {
         answer: modeled || extractiveAnswer(question, transcript),
