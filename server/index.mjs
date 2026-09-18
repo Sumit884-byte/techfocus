@@ -2176,9 +2176,7 @@ async function videoTranscript(videoId) {
     ""
   ).trim();
   if (description.length > 40) {
-    const payload = { text: description, segments: [], source: "description", ts: Date.now() };
-    transcriptCache.set(videoId, payload);
-    return payload;
+    return { text: description, segments: [], source: "description", ts: Date.now() };
   }
 
   return { text: "", segments: [], source: "" };

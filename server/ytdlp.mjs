@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmodSync, createWriteStream, existsSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, createWriteStream, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -59,7 +59,17 @@ export async function ensureYtDlp() {
   return downloadYtDlp(dest);
 }
 
-function runJson(bin, videoId, timeoutMs = 18000) {
+function cookieArgs() {
+  const raw = (process.env.YT_DLP_COOKIES || process.env.YT_COOKIES || "").trim();
+  if (!raw) return [];
+  const file = join(tmpdir(), "techfocus-yt-cookies.txt");
+  if (!existsSync(file) || statSync(file).size < 20) {
+    writeFileSync(file, raw.includes("# Netscape") ? raw : `# Netscape HTTP Cookie File\n${raw}\n`);
+  }
+  return ["--cookies", file];
+}
+
+function runJson(bin, videoId, extraArgs, timeoutMs = 9000) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       bin,
@@ -71,8 +81,8 @@ function runJson(bin, videoId, timeoutMs = 18000) {
         "--no-check-certificates",
         "--socket-timeout",
         "12",
-        "--extractor-args",
-        "youtube:player_client=android,web",
+        ...cookieArgs(),
+        ...extraArgs,
         `https://www.youtube.com/watch?v=${videoId}`,
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
@@ -162,8 +172,23 @@ async function resolveBin() {
 }
 
 export async function ytDlpCaptionUrls(videoId, want = "en") {
-  const info = await runJson(await resolveBin(), videoId);
-  return captionUrlsFromInfo(info, want);
+  const bin = await resolveBin();
+  const attempts = [
+    ["--extractor-args", "youtube:player_client=tv,tv_embedded,web_embedded"],
+    ["--extractor-args", "youtube:player_client=ios,mweb"],
+    ["--impersonate", "chrome", "--extractor-args", "youtube:player_client=web"],
+  ];
+  let lastError = new Error("yt-dlp failed");
+  for (const extra of attempts) {
+    try {
+      const info = await runJson(bin, videoId, extra);
+      const urls = captionUrlsFromInfo(info, want);
+      if (urls.length) return urls;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && process.argv.includes("--ensure")) {
