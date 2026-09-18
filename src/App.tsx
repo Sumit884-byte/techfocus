@@ -4041,23 +4041,11 @@ function PlayerView({
             }}
           />
           {audioMode && !watchOnYoutube && !silent ? (
-            <div
-              className="tf-listen-pad"
-              style={{
-                position: "absolute",
-                inset: 0,
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "flex-end",
-                padding: 24,
-                background: "var(--tf-bg)",
-                pointerEvents: "auto",
-              }}
-            >
+            <div className="tf-listen-pad">
               <img
                 src={thumb(video.id)}
                 alt=""
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.28 }}
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.55 }}
               />
               <button
                 type="button"
@@ -4068,65 +4056,12 @@ function PlayerView({
               >
                 {(shared && listen ? listen.clock : clock).paused ? <PlayIcon /> : <PauseIcon />}
               </button>
-              <div className="tf-listen-top">
-                <div
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "11px",
-                    color: "var(--tf-accent)",
-                    letterSpacing: "0.1em",
-                  }}
-                >
-                  {(shared && listen ? listen.status : streamStatus) === "buffering"
-                    ? "LOADING AUDIO"
-                    : (shared && listen ? listen.status : streamStatus) === "starting"
-                      ? "STARTING AUDIO"
-                      : "LISTENING"}
-                </div>
-                <button
-                  type="button"
-                  className="tf-watch-action"
-                  aria-label="Switch to video"
-                  title="Switch to video"
-                  onClick={() => chooseWatchMode(false)}
-                >
-                  <VideoCamIcon />
-                  <span>video</span>
-                </button>
-              </div>
               {autoDub ? (
-                <div style={{ position: "relative", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--tf-dim)", marginBottom: 10 }}>
+                <div style={{ position: "absolute", top: 12, left: 12, zIndex: 3, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--tf-dim)" }}>
                   auto dub · {langLabel(lang)}
                 </div>
               ) : null}
               <div className="tf-listen-controls">
-                <div className="tf-listen-skip">
-                  <button type="button" className="tf-skip-btn" aria-label="Back 10 seconds" title="Back 10 seconds" onClick={() => seekBy(-10)}>
-                    <SkipBackIcon />
-                  </button>
-                  <button
-                    aria-label={(shared && listen ? listen.clock : clock).paused ? "Play audio" : "Pause audio"}
-                    onClick={toggleListenPlay}
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: "50%",
-                      border: "none",
-                      background: "var(--tf-accent)",
-                      color: "#111827",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      cursor: "pointer",
-                      flexShrink: 0,
-                    }}
-                  >
-                    {(shared && listen ? listen.clock : clock).paused ? <PlayIcon /> : <PauseIcon />}
-                  </button>
-                  <button type="button" className="tf-skip-btn" aria-label="Forward 10 seconds" title="Forward 10 seconds" onClick={() => seekBy(10)}>
-                    <SkipForwardIcon />
-                  </button>
-                </div>
                 <div className="tf-listen-scrub">
                   <input
                     type="range"
@@ -4250,7 +4185,7 @@ function PlayerView({
           ) : null}
           {!audioMode && !watchOnYoutube ? <VideoFullView enabled /> : null}
           <VideoSkipOverlay
-            enabled={!audioMode && !watchOnYoutube && !silent}
+            enabled={!watchOnYoutube && !silent}
             paused={(shared && listen ? listen.clock : clock).paused}
             onBack={() => seekBy(-10)}
             onForward={() => seekBy(10)}

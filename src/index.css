@@ -391,7 +391,7 @@ body {
   --tf-watch-rest: 220px;
 }
 
-.tf-watch .tf-player-bleed:not(.is-listen) {
+.tf-watch .tf-player-bleed {
   width: min(100%, calc((100dvh - var(--tf-watch-rest)) * 16 / 9));
   max-height: calc(100dvh - var(--tf-watch-rest));
   margin-inline: auto;
@@ -660,34 +660,27 @@ body {
   height: 28px;
 }
 
-.tf-listen-top,
+.tf-listen-pad {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  background: #000;
+}
+
 .tf-listen-controls {
-  position: relative;
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  z-index: 3;
   display: flex;
   align-items: center;
+  gap: 12px;
   min-width: 0;
 }
 
-.tf-listen-top {
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.tf-listen-top button {
-  min-height: 36px;
-  flex-shrink: 0;
-}
-
-.tf-listen-controls {
-  gap: 16px;
-}
-
 .tf-listen-skip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  display: none;
 }
 
 .tf-skip-btn {
@@ -1246,12 +1239,6 @@ button:hover > .tf-card {
     border: none;
   }
 
-  .tf-player-bleed.is-listen {
-    aspect-ratio: auto;
-    height: min(46vh, 300px);
-    min-height: 252px;
-  }
-
   .tf-player-main {
     padding-top: 14px;
   }
@@ -1272,14 +1259,6 @@ button:hover > .tf-card {
   .tf-card-copy {
     min-height: 0 !important;
     padding: 12px 14px 14px !important;
-  }
-
-  .tf-listen-pad {
-    padding: 12px 14px 14px !important;
-  }
-
-  .tf-listen-controls {
-    gap: 12px;
   }
 
   .tf-video-meta {
