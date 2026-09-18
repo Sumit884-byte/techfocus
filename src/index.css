@@ -347,6 +347,14 @@ body {
   border: 1px solid var(--line);
 }
 
+.tf-watch .tf-player-bleed {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
 .tf-player-stage {
   width: 100%;
   height: 100%;
@@ -409,9 +417,115 @@ body {
   padding-top: 16px;
 }
 
+.tf-watch .tf-player-main {
+  max-width: 1280px;
+  padding-top: 18px;
+}
+
+.tf-watch-below {
+  margin-bottom: 8px;
+}
+
 .tf-watch-title {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.tf-watch .tf-watch-title {
+  font-family: var(--sans);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.4;
+  margin: 0 0 12px;
+}
+
+.tf-watch-owner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 20px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.tf-watch-owner-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.tf-watch-owner-left .tf-channel-logo,
+.tf-watch-owner-left .tf-video-meta-channel svg {
+  width: 40px;
+  height: 40px;
+}
+
+.tf-watch-owner-copy {
+  min-width: 0;
+}
+
+.tf-watch-owner-name {
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.tf-watch-owner-meta {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.tf-watch .tf-watch-actions {
+  margin-bottom: 0;
+}
+
+.tf-watch .tf-watch-action,
+.tf-watch .tf-watch-like {
+  background: #272727;
+  border: 0;
+  border-radius: 18px;
+  color: #f1f1f1;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 0 14px;
+  min-height: 36px;
+}
+
+.tf-watch .tf-watch-action.is-on {
+  background: #3d3d3d;
+  border-color: transparent;
+  color: #fff;
+}
+
+.tf-watch .tf-watch-like {
+  pointer-events: none;
+}
+
+.tf-watch .tf-watch-desc,
+.tf-watch .tf-watch-desc-empty {
+  background: #272727;
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+
+.tf-watch .tf-watch-desc-text {
+  font-family: var(--sans);
+}
+
+.tf-watch .tf-watch-comments-head {
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
 }
 
 .tf-watch-meta-row {

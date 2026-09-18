@@ -802,9 +802,9 @@ function extractInnerTubeVideos(payload) {
   return videos;
 }
 
-async function innertube(endpoint, body, clientName = "WEB") {
+async function innertube(endpoint, body, clientName = "WEB", timeoutMs = 4000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4000);
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : 0;
   const locale = currentLocale();
   const client =
     clientName === "ANDROID"
@@ -828,7 +828,7 @@ async function innertube(endpoint, body, clientName = "WEB") {
   } catch {
     return null;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -1336,8 +1336,8 @@ async function playlistVideos(playlistId, includeShorts = false, continuation = 
   if (cached && Date.now() - cached.ts < SEARCH_TTL_MS) return cached.results;
 
   const data = continuation
-    ? await innertube("browse", { continuation })
-    : await innertube("browse", { browseId: `VL${playlistId}` });
+    ? await innertube("browse", { continuation }, "WEB", 0)
+    : await innertube("browse", { browseId: `VL${playlistId}` }, "WEB", 0);
   const author =
     data?.header?.playlistHeaderRenderer?.ownerText?.runs?.[0]?.text ||
     data?.metadata?.playlistMetadataRenderer?.owner ||
@@ -1362,16 +1362,12 @@ async function playlistVideos(playlistId, includeShorts = false, continuation = 
     return payload;
   }
 
-  const instance = INVIDIOUS_INSTANCES[0];
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(`${instance}/api/v1/playlists/${playlistId}`, {
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (res.ok) {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const res = await fetch(`${instance}/api/v1/playlists/${playlistId}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) continue;
       const body = await res.json();
       const mapped = (body.videos || []).map((item) => ({
         id: item.videoId,
@@ -1385,6 +1381,7 @@ async function playlistVideos(playlistId, includeShorts = false, continuation = 
         short: Number(item.lengthSeconds) > 0 && Number(item.lengthSeconds) <= 60,
       }));
       const fallback = keepPlaylistVideos(mapped, includeShorts);
+      if (!fallback.length) continue;
       const count =
         (typeof body.videoCount === "number" && body.videoCount > 0
           ? body.videoCount === 1 ? "1 video" : `${body.videoCount} videos`
@@ -1400,9 +1397,9 @@ async function playlistVideos(playlistId, includeShorts = false, continuation = 
       };
       searchCache.set(key, { results: payload, ts: Date.now() });
       return payload;
+    } catch {
+      // try the next instance
     }
-  } catch {
-    // empty
   }
   return {
     results: [],

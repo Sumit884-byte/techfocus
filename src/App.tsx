@@ -1123,10 +1123,12 @@ function VideoMetaLine({
   video,
   likes = "",
   className = "",
+  hideChannel = false,
 }: {
   video: Video;
   likes?: string;
   className?: string;
+  hideChannel?: boolean;
 }) {
   const [filled, setFilled] = useState(() => VIDEO_META_CACHE.get(video.id) || { views: "", posted: "" });
 
@@ -1156,7 +1158,7 @@ function VideoMetaLine({
   if (!channel && !views && !posted.text) return null;
   return (
     <div className={`tf-video-meta ${className}`.trim()}>
-      {channel ? (
+      {channel && !hideChannel ? (
         <span className="tf-video-meta-channel" title={channel}>
           <ChannelLogo video={video} />
           <span className="tf-video-meta-elide">{channel}</span>
@@ -1620,25 +1622,38 @@ function PlaylistView({
       }
     }
     const controller = new AbortController();
+    let cancelled = false;
     setLoading(!ready?.length);
-    fetch(`/api/playlist?id=${encodeURIComponent(playlist.id)}`, { signal: controller.signal })
-      .then((res) => res.json())
-      .then((data) => {
+
+    async function loadPlaylist() {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/playlist?id=${encodeURIComponent(playlist.id)}`, { signal: controller.signal });
+        const data = await res.json();
+        if (cancelled) return;
         const results = (Array.isArray(data.results) ? data.results : []).map((video: Video) =>
           sanitizeVideo(video, playlist.channel),
         );
-        if (results.length) rememberPlaylist(playlist.id, results, data.count, data.continuation || "", data.duration);
+        if (results.length) {
+          rememberPlaylist(playlist.id, results, data.count, data.continuation || "", data.duration);
+          if (results[0]) preloadPlayer(results[0].id);
+        }
         setVideos(results);
         setHasMore(Boolean(data.continuation) || parseVideoCount(data.count) > results.length);
-        if (results[0]) preloadPlayer(results[0].id);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setVideos([]);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
+        setLoading(false);
+      } catch {
+        if (cancelled || controller.signal.aborted) return;
+        window.setTimeout(() => {
+          if (!cancelled) void loadPlaylist();
+        }, 2000);
+      }
+    }
+
+    void loadPlaylist();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [playlist.id, playlist.count]);
 
   async function loadMoreLectures() {
@@ -3758,7 +3773,7 @@ function PlayerView({
   const [audioMode, setAudioMode] = useState(() => initialAudioMode(video.id, preferAudio));
   const [audioRate, setAudioRate] = useState(() => readAudioRate(video.id));
   const [description, setDescription] = useState("");
-  const [descOpen, setDescOpen] = useState(false);
+  const [descOpen, setDescOpen] = useState(true);
   const [descReady, setDescReady] = useState(false);
   const [comments, setComments] = useState<VideoComment[]>([]);
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -3958,7 +3973,7 @@ function PlayerView({
   useEffect(() => {
     const controller = new AbortController();
     setDescription("");
-    setDescOpen(false);
+    setDescOpen(true);
     setDescReady(false);
     setComments([]);
     setCommentsOpen(false);
@@ -4512,109 +4527,95 @@ function PlayerView({
       </div>
 
       <main className="tf-main tf-player-main">
-        <div className="tf-path" style={{ marginBottom: 24 }}>
-          {displayCategory(video.category) ? (
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: "11px",
-                color: "var(--tf-accent)",
-                letterSpacing: "0.1em",
-                textTransform: "uppercase",
-                marginBottom: 10,
-              }}
-            >
-              {displayCategory(video.category)}
+        <div className="tf-watch-below">
+          <h1 className="tf-watch-title">{video.title}</h1>
+          <div className="tf-watch-owner">
+            <div className="tf-watch-owner-left">
+              <ChannelLogo video={video} />
+              <div className="tf-watch-owner-copy">
+                <div className="tf-watch-owner-name">{cleanMeta(video.channel) || "YouTube"}</div>
+                <VideoMetaLine video={video} hideChannel className="tf-watch-owner-meta" />
+              </div>
             </div>
-          ) : null}
-          <h1
-            className="tf-watch-title"
-            style={{
-              fontSize: "clamp(18px, 3vw, 26px)",
-              fontWeight: 700,
-              color: "var(--tf-text)",
-              lineHeight: 1.35,
-              marginBottom: 14,
-            }}
-          >
-            {video.title}
-          </h1>
-          <div className="tf-watch-meta-row">
-            <VideoMetaLine video={video} likes={likes} />
-            {series && onOpenCourse ? (
+            <div className="tf-watch-actions">
               <button
                 type="button"
-                className="tf-video-meta-stat tf-playlist-link"
-                title={series.title || "Open related playlist"}
-                onClick={() => onOpenCourse(series)}
+                className="tf-watch-action tf-skip-action"
+                aria-label="Back 10 seconds"
+                title="Back 10 seconds"
+                disabled={watchOnYoutube}
+                onClick={() => seekBy(-10)}
               >
-                <PlaylistIcon />
-                <span>related playlist</span>
+                <SkipBackIcon />
+                <span>−10s</span>
               </button>
-            ) : null}
+              <button
+                type="button"
+                className="tf-watch-action tf-skip-action"
+                aria-label="Forward 10 seconds"
+                title="Forward 10 seconds"
+                disabled={watchOnYoutube}
+                onClick={() => seekBy(10)}
+              >
+                <SkipForwardIcon />
+                <span>+10s</span>
+              </button>
+              {likes ? (
+                <span className="tf-watch-action tf-watch-like" title={`${likes} likes`}>
+                  <LikeIcon />
+                  <span>{compactViews(likes) || likes}</span>
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="tf-watch-action"
+                aria-label={audioMode ? "Switch to video" : "Switch to listen"}
+                title={audioMode ? "Switch to video" : "Switch to listen"}
+                disabled={watchOnYoutube}
+                onClick={() => chooseWatchMode(!audioMode)}
+              >
+                {audioMode ? <VideoCamIcon /> : <ListenIcon />}
+                <span>{audioMode ? "Video" : "Listen"}</span>
+              </button>
+              <TalkToAi video={video} />
+              <button
+                type="button"
+                className={`tf-watch-action${descOpen ? " is-on" : ""}`}
+                aria-label="Description"
+                title="Description"
+                aria-expanded={descOpen}
+                onClick={() => setDescOpen((open) => !open)}
+              >
+                <DescriptionIcon />
+                <span>Description</span>
+              </button>
+              <button
+                type="button"
+                className={`tf-watch-action${commentsOpen ? " is-on" : ""}`}
+                aria-label={descReady && comments.length ? `Comments (${comments.length})` : "Comments"}
+                title={descReady && comments.length ? `Comments (${comments.length})` : "Comments"}
+                aria-expanded={commentsOpen}
+                onClick={() => setCommentsOpen((open) => !open)}
+              >
+                <CommentsIcon />
+                <span>Comments{descReady && comments.length ? ` ${comments.length}` : ""}</span>
+                {descReady && comments.length ? (
+                  <span className="tf-watch-action-badge">{comments.length > 99 ? "99+" : comments.length}</span>
+                ) : null}
+              </button>
+              {series && onOpenCourse ? (
+                <button
+                  type="button"
+                  className="tf-watch-action tf-playlist-link"
+                  title={series.title || "Open related playlist"}
+                  onClick={() => onOpenCourse(series)}
+                >
+                  <PlaylistIcon />
+                  <span>From series</span>
+                </button>
+              ) : null}
+            </div>
           </div>
-        </div>
-
-        <div className="tf-watch-actions">
-          <button
-            type="button"
-            className="tf-watch-action tf-skip-action"
-            aria-label="Back 10 seconds"
-            title="Back 10 seconds"
-            disabled={watchOnYoutube}
-            onClick={() => seekBy(-10)}
-          >
-            <SkipBackIcon />
-            <span>−10s</span>
-          </button>
-          <button
-            type="button"
-            className="tf-watch-action tf-skip-action"
-            aria-label="Forward 10 seconds"
-            title="Forward 10 seconds"
-            disabled={watchOnYoutube}
-            onClick={() => seekBy(10)}
-          >
-            <SkipForwardIcon />
-            <span>+10s</span>
-          </button>
-          <button
-            type="button"
-            className="tf-watch-action"
-            aria-label={audioMode ? "Switch to video" : "Switch to listen"}
-            title={audioMode ? "Switch to video" : "Switch to listen"}
-            disabled={watchOnYoutube}
-            onClick={() => chooseWatchMode(!audioMode)}
-          >
-            {audioMode ? <VideoCamIcon /> : <ListenIcon />}
-            <span>{audioMode ? "video" : "listen"}</span>
-          </button>
-          <TalkToAi video={video} />
-          <button
-            type="button"
-            className={`tf-watch-action${descOpen ? " is-on" : ""}`}
-            aria-label="Description"
-            title="Description"
-            aria-expanded={descOpen}
-            onClick={() => setDescOpen((open) => !open)}
-          >
-            <DescriptionIcon />
-            <span>description</span>
-          </button>
-          <button
-            type="button"
-            className={`tf-watch-action${commentsOpen ? " is-on" : ""}`}
-            aria-label={descReady && comments.length ? `Comments (${comments.length})` : "Comments"}
-            title={descReady && comments.length ? `Comments (${comments.length})` : "Comments"}
-            aria-expanded={commentsOpen}
-            onClick={() => setCommentsOpen((open) => !open)}
-          >
-            <CommentsIcon />
-            <span>comments{descReady && comments.length ? ` · ${comments.length}` : ""}</span>
-            {descReady && comments.length ? (
-              <span className="tf-watch-action-badge">{comments.length > 99 ? "99+" : comments.length}</span>
-            ) : null}
-          </button>
         </div>
 
         {descOpen ? (
