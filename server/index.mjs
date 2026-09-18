@@ -2279,41 +2279,31 @@ function scoreChunk(question, text) {
   return words.reduce((sum, word) => sum + (hay.includes(word) ? 1 : 0), 0);
 }
 
-function relevantTranscript(question, transcript, limit = 9000) {
+function relevantTranscript(question, transcript, limit = 12000) {
+  const full = String(transcript.text || "").replace(/\s+/g, " ").trim();
+  if (/summar|overview|key points?|hard parts?|explain this|what (is|does) this (lecture|video)/i.test(question)) {
+    return full.slice(0, limit);
+  }
   const segments = transcript.segments?.length
     ? transcript.segments
-    : transcript.text.split(/(?<=[.?!])\s+/).map((text) => ({ start: 0, text }));
-  if (!segments.length) return "";
+    : full.split(/(?<=[.?!])\s+/).map((text) => ({ start: 0, text }));
+  if (!segments.length) return full.slice(0, limit);
   const ranked = segments
     .map((item, index) => ({ index, score: scoreChunk(question, item.text), item }))
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 14)
+    .slice(0, 20)
     .sort((a, b) => a.index - b.index);
-  const picked = (ranked.length ? ranked.map((row) => row.item) : segments.slice(0, 40))
+  const picked = (ranked.length ? ranked.map((row) => row.item) : segments.slice(0, 60))
     .map((item) => item.text)
     .join(" ");
-  return picked.slice(0, limit);
+  return (picked || full).slice(0, limit);
 }
 
 function topicAnswer(title, question, { mentionMissingCaptions = false } = {}) {
-  const q = String(question || "").toLowerCase();
-  const topic = String(title || "this topic").replace(/\s+/g, " ").trim();
-  const note = mentionMissingCaptions ? "I could not hear this lecture, but I can still answer the question. " : "";
-
-  if (/memor(y|ize|ise)|rote|by heart/.test(q) && /chart|table|graph|plot|figure|slide|z-?table/.test(q)) {
-    return `${note}No. You do not need to memorize every chart in "${topic}". Learn the shape and how to reconstruct it: for a normal distribution that is the bell curve, center at the mean, spread from the standard deviation, the 68-95-99.7 rule, and how to use a z-score or calculator. Know how to read a table or graph, not every picture from the slides.`;
-  }
-  if (/memor(y|ize|ise)|rote|by heart/.test(q)) {
-    return `${note}Usually no. For "${topic}", understand the idea and be able to use it in a problem. Memorize only a few core facts (definitions, the empirical rule, how z-scores work), not the whole lecture.`;
-  }
-  if (/summar|overview|what (is|does) this (lecture|video)/.test(q)) {
-    return `${note}This video is titled "${topic}". A lecture with that name typically defines the idea, shows the main properties, and works examples. Ask about a specific piece (mean, variance, z-score, empirical rule) and I will explain that part.`;
-  }
-  if (/exam|test|quiz|important|need to know|will i need/.test(q)) {
-    return `${note}For "${topic}", you are more likely to be tested on using the idea than on copying slides. Practice a few calculations and be able to explain the definition in your own words.`;
-  }
-  return `${note}Your question is about "${topic}": ${question.trim()} I do not have the spoken lecture, so I cannot quote the instructor. For this topic, focus on the definition, when to use it, and one worked example rather than memorizing visuals.`;
+  const topic = String(title || "this video").replace(/\s+/g, " ").trim();
+  const note = mentionMissingCaptions ? "I could not load captions for this video. " : "";
+  return `${note}This is "${topic}". ${question.trim()} I need a working model key or a transcript to answer in detail.`;
 }
 
 function extractiveAnswer(question, transcript) {
@@ -2334,67 +2324,84 @@ function extractiveAnswer(question, transcript) {
   return ranked.join(" ");
 }
 
+async function chatCompletions(url, headers, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  const text = data.choices?.[0]?.message?.content || data.candidates?.[0]?.content?.parts?.map((part) => part.text).join("");
+  if (!res.ok || !text) {
+    const err = data.error?.message || data.error || `HTTP ${res.status}`;
+    throw new Error(typeof err === "string" ? err : JSON.stringify(err));
+  }
+  return String(text).trim();
+}
+
 async function askLanguageModel(title, question, context, history = []) {
-  const system = `You are TechFocus Talk to AI, a study assistant. Answer the student's actual question. If a transcript is provided, prefer it. If there is no transcript, answer from the video title topic and general knowledge of that topic. Be concise and concrete. Do not repeat a captions warning if you already said it. Video title: ${title}`;
+  const system = `You are TechFocus Talk to AI. Answer only about this video: "${title}". Prefer the provided transcript or description. If captions are missing, use the title, description, and accurate knowledge of that exact topic. Never mention z-scores, variance, empirical rules, or generic exam advice unless those words appear in the source. Be concrete and concise. Do not invent quotes.`;
   const messages = [
     { role: "system", content: system },
     ...history.slice(-6).map((item) => ({
       role: item.role === "assistant" ? "assistant" : "user",
       content: String(item.text || "").slice(0, 1200),
     })),
-    { role: "user", content: `Transcript:\n${context}\n\nQuestion: ${question}` },
+    { role: "user", content: `Source:\n${context}\n\nQuestion: ${question}` },
   ];
-
   const groq = process.env.GROQ_API_KEY || "";
   const openai = process.env.OPENAI_API_KEY || "";
   const gemini = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || "";
   const openrouter = process.env.OPENROUTER_API_KEY || "";
-
-  try {
-    if (groq) {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${groq}` },
-        body: JSON.stringify({ model: "llama-3.1-8b-instant", messages, temperature: 0.2, max_tokens: 500 }),
-      });
-      const data = await res.json();
-      const text = data.choices?.[0]?.message?.content;
-      if (text) return text.trim();
+  const attempts = [];
+  if (groq) {
+    for (const model of ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b"]) {
+      attempts.push(() =>
+        chatCompletions(
+          "https://api.groq.com/openai/v1/chat/completions",
+          { Authorization: `Bearer ${groq}` },
+          { model, messages, temperature: 0.2, max_tokens: 800 },
+        ),
+      );
     }
-    if (openai) {
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${openai}` },
-        body: JSON.stringify({ model: "gpt-4o-mini", messages, temperature: 0.2, max_tokens: 500 }),
-      });
-      const data = await res.json();
-      const text = data.choices?.[0]?.message?.content;
-      if (text) return text.trim();
+  }
+  if (openai) {
+    attempts.push(() =>
+      chatCompletions(
+        "https://api.openai.com/v1/chat/completions",
+        { Authorization: `Bearer ${openai}` },
+        { model: "gpt-4o-mini", messages, temperature: 0.2, max_tokens: 800 },
+      ),
+    );
+  }
+  if (openrouter) {
+    for (const model of ["openai/gpt-4o-mini", "meta-llama/llama-3.3-70b-instruct:free", "google/gemini-2.0-flash-001"]) {
+      attempts.push(() =>
+        chatCompletions(
+          "https://openrouter.ai/api/v1/chat/completions",
+          { Authorization: `Bearer ${openrouter}`, "HTTP-Referer": "https://techfocus-beta.vercel.app" },
+          { model, messages, temperature: 0.2, max_tokens: 800 },
+        ),
+      );
     }
-    if (openrouter) {
-      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${openrouter}` },
-        body: JSON.stringify({ model: "meta-llama/llama-3.1-8b-instruct:free", messages, temperature: 0.2, max_tokens: 500 }),
-      });
-      const data = await res.json();
-      const text = data.choices?.[0]?.message?.content;
-      if (text) return text.trim();
-    }
-    if (gemini) {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${gemini}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+  }
+  if (gemini) {
+    for (const model of ["gemini-2.0-flash", "gemini-2.5-flash"]) {
+      attempts.push(() =>
+        chatCompletions(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${gemini}`, {}, {
           contents: [{ parts: [{ text: `${system}\n\n${messages.filter((item) => item.role !== "system").map((item) => item.content).join("\n\n")}` }] }],
         }),
-      });
-      const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text).join("");
-      if (text) return text.trim();
+      );
     }
-  } catch {
-    return "";
+  }
+
+  for (const attempt of attempts) {
+    try {
+      const text = await attempt();
+      if (text) return text;
+    } catch (error) {
+      console.error("talk model failed", error?.message || error);
+    }
   }
   return "";
 }
@@ -3001,27 +3008,44 @@ export async function handleRequest(req, res) {
       return;
     }
     try {
-      const transcript = await videoTranscript(id);
-      if (!transcript.text) {
-        const context = `There is no readable transcript. Video title: "${title}". Answer the student's question about this topic.`;
-        const modeled = await askLanguageModel(title, question, context, history);
-        const alreadyNoted = history.some((item) => /could not hear|could not read caption/i.test(item.text || ""));
-        sendJson(res, 200, {
-          answer: modeled || topicAnswer(title, question, { mentionMissingCaptions: !alreadyNoted }),
-          available: false,
-          source: "title",
-        });
-        return;
+      const locale = localeFromRequest(url, body);
+      const [transcript, details] = await localeAls.run(locale, async () => {
+        const detailsP = videoDetails(id).catch(() => ({ description: "" }));
+        const transcriptP = videoTranscript(id).catch(() => ({ text: "", segments: [], source: "" }));
+        const timed = Promise.race([
+          transcriptP,
+          new Promise((resolve) => setTimeout(() => resolve({ text: "", segments: [], source: "" }), 12000)),
+        ]);
+        return Promise.all([timed, detailsP]);
+      });
+      const description = String(details?.description || "").trim();
+      const alreadyNoted = history.some((item) => /could not hear|could not load caption|only have the YouTube description/i.test(item.text || ""));
+      let context = "";
+      let source = transcript.source || "";
+      if (transcript.source === "transcript" && transcript.text) {
+        context = relevantTranscript(question, transcript);
+        source = "transcript";
+      } else {
+        context = [
+          `Spoken captions were not available.`,
+          `Title: ${title}`,
+          description ? `YouTube description:\n${description.slice(0, 2500)}` : "",
+          `Answer about this exact video/topic. Do not paste chapter lists.`,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        source = description ? "description" : "title";
       }
-      const context =
-        transcript.source === "description"
-          ? `There is no spoken transcript. This is only the YouTube description, not what was said:\n${transcript.text.slice(0, 2500)}\nAnswer from the title and this description. Do not paste chapter timestamps.`
-          : relevantTranscript(question, transcript);
       const modeled = await askLanguageModel(title, question, context, history);
+      const fallback =
+        modeled ||
+        (source === "transcript"
+          ? extractiveAnswer(question, transcript)
+          : topicAnswer(title, question, { mentionMissingCaptions: !alreadyNoted }));
       sendJson(res, 200, {
-        answer: modeled || extractiveAnswer(question, transcript),
-        available: true,
-        source: transcript.source || "transcript",
+        answer: fallback,
+        available: source === "transcript",
+        source,
       });
     } catch {
       sendJson(res, 500, { answer: "", error: "Talk to AI failed" });
