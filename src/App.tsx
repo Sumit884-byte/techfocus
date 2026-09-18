@@ -492,6 +492,17 @@ function LikeIcon() {
   );
 }
 
+function ShareIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
+    </svg>
+  );
+}
+
 function ViewsIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
@@ -3498,6 +3509,7 @@ function PlayerView({
   const [comments, setComments] = useState<VideoComment[]>([]);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [likes, setLikes] = useState("");
+  const [shareLabel, setShareLabel] = useState("Share");
   const [series, setSeries] = useState<Playlist | null>(() =>
     course && isCoursePlaylistId(course.id) ? course : null,
   );
@@ -4254,7 +4266,7 @@ function PlayerView({
               <ChannelLogo video={video} />
               <div className="tf-watch-owner-copy">
                 <div className="tf-watch-owner-name">{cleanMeta(video.channel) || "YouTube"}</div>
-                <VideoMetaLine video={video} hideChannel className="tf-watch-owner-meta" />
+                <VideoMetaLine video={video} likes={likes} hideChannel className="tf-watch-owner-meta" />
               </div>
             </div>
             <div className="tf-watch-actions">
@@ -4280,12 +4292,34 @@ function PlayerView({
                 <SkipForwardIcon />
                 <span>+10s</span>
               </button>
-              {likes ? (
-                <span className="tf-watch-action tf-watch-like" title={`${likes} likes`}>
-                  <LikeIcon />
-                  <span>{compactViews(likes) || likes}</span>
-                </span>
-              ) : null}
+              <button
+                type="button"
+                className="tf-watch-action"
+                aria-label="Share"
+                title="Share"
+                onClick={async () => {
+                  const url = `${window.location.origin}${window.location.pathname}#/watch/${video.id}`;
+                  const title = video.title || "TechFocus";
+                  try {
+                    if (typeof navigator.share === "function") {
+                      await navigator.share({ title, url, text: title });
+                      return;
+                    }
+                  } catch (error) {
+                    if ((error as Error).name === "AbortError") return;
+                  }
+                  try {
+                    await navigator.clipboard.writeText(url);
+                    setShareLabel("Copied");
+                    window.setTimeout(() => setShareLabel("Share"), 1600);
+                  } catch {
+                    window.prompt("Copy link", url);
+                  }
+                }}
+              >
+                <ShareIcon />
+                <span>{shareLabel}</span>
+              </button>
               <button
                 type="button"
                 className="tf-watch-action"
