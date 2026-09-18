@@ -2209,11 +2209,11 @@ async function videoTranscript(videoId) {
   if (cached && Date.now() - cached.ts < TRANSCRIPT_TTL_MS) return cached;
 
   const want = currentLocale().hl || "en";
-  const hasCookies = Boolean((process.env.YT_DLP_COOKIES || process.env.YT_COOKIES || "").trim());
-  const tryYtDlpFirst = !process.env.VERCEL || hasCookies;
-  const loaders = tryYtDlpFirst
-    ? [() => ytDlpTranscript(videoId, want), () => invidiousTranscript(videoId, want), () => pipedTranscript(videoId, want)]
-    : [() => invidiousTranscript(videoId, want), () => pipedTranscript(videoId, want), () => ytDlpTranscript(videoId, want)];
+  const loaders = [
+    () => ytDlpTranscript(videoId, want),
+    () => invidiousTranscript(videoId, want),
+    () => pipedTranscript(videoId, want),
+  ];
 
   for (const load of loaders) {
     try {
@@ -2250,7 +2250,7 @@ async function videoTranscript(videoId) {
   }
 
   const fromNext = await innertubeTranscript(videoId);
-  if (fromNext?.text) {
+  if (fromNext?.text && fromNext.source === "transcript") {
     const payload = { ...fromNext, ts: Date.now() };
     transcriptCache.set(videoId, payload);
     return payload;
@@ -2317,6 +2317,9 @@ function topicAnswer(title, question, { mentionMissingCaptions = false } = {}) {
 }
 
 function extractiveAnswer(question, transcript) {
+  if (transcript.source === "description") {
+    return "I only have the YouTube description, not the spoken lecture, so I cannot quote what was said.";
+  }
   const sentences = transcript.text.split(/(?<=[.?!])\s+/).filter((item) => item.length > 40);
   if (!sentences.length) return "I could not find enough spoken text in this video to answer that.";
   const ranked = sentences

@@ -69,7 +69,7 @@ function cookieArgs() {
   return ["--cookies", file];
 }
 
-function runJson(bin, videoId, extraArgs, timeoutMs = 9000) {
+function runJson(bin, videoId, extraArgs, timeoutMs = 22000) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       bin,
@@ -174,9 +174,9 @@ async function resolveBin() {
 export async function ytDlpCaptionUrls(videoId, want = "en") {
   const bin = await resolveBin();
   const attempts = [
-    ["--extractor-args", "youtube:player_client=tv,tv_embedded,web_embedded"],
+    [],
+    ["--extractor-args", "youtube:player_client=web,web_embedded"],
     ["--extractor-args", "youtube:player_client=ios,mweb"],
-    ["--impersonate", "chrome", "--extractor-args", "youtube:player_client=web"],
   ];
   let lastError = new Error("yt-dlp failed");
   for (const extra of attempts) {
